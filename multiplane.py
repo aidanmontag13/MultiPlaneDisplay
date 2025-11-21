@@ -80,12 +80,22 @@ def infer(inp):
     depth = (depth - depth.min()) / (depth.max() - depth.min())
     return depth
 
+def despeckle(mask, kernel_size):
+    kernel = np.ones((kernel_size,kernel_size), np.uint8)   # or (5,5) depending on outline thickness
+    mask = mask * -1 + 1
+    mask = (mask * 255).astype(np.uint8)
+    closed = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kernel)
+    mask = (closed.astype(np.float32)) / 255.0
+    mask = mask * -1 + 1
+    return mask
+
 def soft_threshold_range(depth, low_thresh, high_thresh, rolloff, blur):
     mask = np.zeros_like(depth, dtype=np.float32)
 
     if rolloff == 0:
         mask = ((depth >= low_thresh) & (depth <= high_thresh)).astype(np.float32)
         mask = cv2.GaussianBlur(mask, (blur, blur), 0)
+        mask = despeckle(mask, kernel_size=3)
         return mask
     
     lower_ramp = (depth - (low_thresh - 0.5 * rolloff)) / rolloff
@@ -101,6 +111,7 @@ def soft_threshold_range(depth, low_thresh, high_thresh, rolloff, blur):
     else:
         mask = np.minimum(lower_ramp, upper_ramp)
 
+    mask = despeckle(mask, kernel_size=3)
     mask = cv2.GaussianBlur(mask, (blur, blur), 0)
     
     return mask
