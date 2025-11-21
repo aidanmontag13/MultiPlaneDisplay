@@ -1,0 +1,13 @@
+[Unit]
+Description= Run multiplane.py at boot
+After=network.target
+
+[Service]
+ExecStart=/home/multiplane/MultiPlaneDisplay/venv/bin/python /home/multiplane/MultiPlaneDisplay/multiplane.py
+WorkingDirectory=/home/multiplane/MultiPlaneDisplay
+StandardOutput=inherit
+StandardError=inherit
+Restart=no
+
+[Install]
+WantedBy=multi-user.target

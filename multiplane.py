@@ -15,7 +15,7 @@ session = ort.InferenceSession(
 input_name = session.get_inputs()[0].name
 
 def find_usb_images():
-    user = os.getlogin()
+    user = "multiplane"
     media_root = f"/media/{user}"
 
     image_paths = []

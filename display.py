@@ -4,11 +4,11 @@ import time
 import glob
 
 IMAGE_DIR = "/home/pi/images"  # Change to your image folder
-DISPLAY_TIME = 30              # Seconds per image
+DISPLAY_TIME = 5              # Seconds per image
 FADE_TIME = 2                  # Seconds for fade in/out
 
 def find_usb_images():
-    user = os.getlogin()
+    user = "multiplane"
     media_root = f"/media/{user}"
 
     image_paths = []
