@@ -25,6 +25,10 @@ def find_usb_images():
             for ext in ("*.jpg", "*.png", "*.tif", "*.tiff"):
                 image_paths.extend(glob.glob(os.path.join(images_folder, ext)))
 
+        else:
+            print(f"No display folder found on USB: {drive_path}")
+            return None
+
     return image_paths
 
 def load_image(path):
@@ -41,34 +45,39 @@ def fade(screen, image, fade_in=True):
         pygame.time.delay(int(FADE_TIME * 1000 / 255))
 
 def main():
+    print("Waiting for USB drive to be ready...")
+    time.sleep(20)
     pygame.init()
     info = pygame.display.Info()
     screen = pygame.display.set_mode((1280, 800), pygame.FULLSCREEN)
     pygame.mouse.set_visible(False)
-    image_files = find_usb_images()
 
-    try:
-        for img_file in image_files:
-            img = load_image(img_file)
-            print(f"Displaying image: {img_file}")
-            fade(screen, img, fade_in=True)
-                
-            start_time = time.time()
-                
-            while time.time() - start_time < 5:
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        pygame.quit()
-                        exit()
-                    if event.type == pygame.KEYDOWN:
-                        print("Exiting on key press.")
-                        pygame.quit()
-                        exit()
-                time.sleep(0.01)
-        fade(screen, img, fade_in=False)
+    print("Starting image display loop.")
+    while True:
+        image_files = find_usb_images()
 
-    except KeyboardInterrupt:
-        pygame.quit()
+        try:
+            for img_file in image_files:
+                img = load_image(img_file)
+                print(f"Displaying image: {img_file}")
+                fade(screen, img, fade_in=True)
+                
+                start_time = time.time()
+                
+                while time.time() - start_time < 5:
+                    for event in pygame.event.get():
+                        if event.type == pygame.QUIT:
+                            pygame.quit()
+                            exit()
+                        if event.type == pygame.KEYDOWN:
+                            print("Exiting on key press.")
+                            pygame.quit()
+                            exit()
+                    time.sleep(0.01)
+            fade(screen, img, fade_in=False)
+
+        except KeyboardInterrupt:
+            pygame.quit()
 
 if __name__ == "__main__":
     main()

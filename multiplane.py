@@ -3,6 +3,7 @@ import cv2
 import numpy as np
 import glob
 import os
+import time
 from skimage.filters import threshold_multiotsu
 
 # Load model
@@ -32,6 +33,9 @@ def find_usb_images():
             # Add all image files (jpg, png, tiff)
             for ext in ("*.jpg", "*.png", "*.tif", "*.tiff"):
                 image_paths.extend(glob.glob(os.path.join(images_folder, ext)))
+        else:
+            print(f"No images folder found on USB: {drive_path}")
+            continue
 
     return image_paths, output_folder
 
@@ -195,6 +199,7 @@ def process_all_images():
 def main():
     #image_path = "images/4.jpg"
     #output_image = prepare_image(image_path)
+    time.sleep(10)
     process_all_images()
 
 if __name__ == "__main__":

@@ -1,13 +1,15 @@
 [Unit]
-Description= Run display.py at boot
-After=network.target
+Description=Run display.py at user login
+After=graphical.target
+Wants=graphical.target
 
 [Service]
-ExecStart=/home/multiplane/MultiPlaneDisplay/venv/bin/python /home/multiplane/MultiPlaneDisplay/display.py
+Type=simple
 WorkingDirectory=/home/multiplane/MultiPlaneDisplay
-StandardOutput=inherit
-StandardError=inherit
-Restart=no
+ExecStart=/home/multiplane/MultiPlaneDisplay/venv/bin/python /home/multiplane/MultiPlaneDisplay/display.py
+Restart=on-failure
+Environment=DISPLAY=:0
+Environment=XDG_RUNTIME_DIR=%t/runtime
 
 [Install]
-WantedBy=multi-user.target
+WantedBy=default.target

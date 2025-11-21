@@ -1,6 +1,7 @@
 [Unit]
 Description= Run multiplane.py at boot
-After=network.target
+After=network.target systemd-udev-settle.service
+Requires=systemd-udev-settle.service
 
 [Service]
 ExecStart=/home/multiplane/MultiPlaneDisplay/venv/bin/python /home/multiplane/MultiPlaneDisplay/multiplane.py
