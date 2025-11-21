@@ -14,6 +14,27 @@ session = ort.InferenceSession(
 # Get correct input name
 input_name = session.get_inputs()[0].name
 
+def find_usb_images():
+    user = os.getlogin()
+    media_root = f"/media/{user}"
+
+    image_paths = []
+
+    # Loop over all USB drives
+    for drive in os.listdir(media_root):
+        drive_path = os.path.join(media_root, drive)
+        images_folder = os.path.join(drive_path, "images")
+        output_folder = os.path.join(drive_path, "display")
+
+        if os.path.isdir(images_folder):
+            print(f"Found images folder on USB: {images_folder}")
+
+            # Add all image files (jpg, png, tiff)
+            for ext in ("*.jpg", "*.png", "*.tif", "*.tiff"):
+                image_paths.extend(glob.glob(os.path.join(images_folder, ext)))
+
+    return image_paths, output_folder
+
 def resize_and_crop(img, target_size):
     target_w, target_h = target_size
     h, w = img.shape[:2]
@@ -143,33 +164,33 @@ def prepare_image(image_path):
 
     #cv2.imshow("depth_map", (depth * 255).astype(np.uint8))
     #cv2.imshow("combined_mask", (combined_mask * 255).astype(np.uint8))
-    cv2.imshow("background_image", (background_image ** (1/2.2) * 255).astype(np.uint8))
-    cv2.imshow("middleground_image", (middleground_image ** (1/2.2) * 255).astype(np.uint8))
-    cv2.imshow("foreground_image", (foreground_image ** (1/2.2) * 255).astype(np.uint8))
+    #cv2.imshow("background_image", (background_image ** (1/2.2) * 255).astype(np.uint8))
+    #cv2.imshow("middleground_image", (middleground_image ** (1/2.2) * 255).astype(np.uint8))
+    #cv2.imshow("foreground_image", (foreground_image ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("background_mask", (background_mask * 255).astype(np.uint8))
     #cv2.imshow("middleground_mask", (middleground_mask * 255).astype(np.uint8))
     #cv2.imshow("foreground_mask", (foreground_mask * 255).astype(np.uint8))
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    #cv2.waitKey(0)
+    #cv2.destroyAllWindows()
 
     return combined_image
 
 def process_all_images():
-    # first, find all images in the input folder
-    # Search for JPG, PNG, and TIFF
-    images = []
-    for ext in ("*.jpg", "*.png", "*.tif", "*.tiff"):
-        images.extend(glob.glob(f"images/{ext}"))
+    images, output_folder = find_usb_images()
+    
+    if not images:
+        print("No USB drive with images found!")
+        return
     
     print(f"Found {len(images)} images in folder.")
 
     for img_path in images:
         image_name = os.path.splitext(os.path.basename(img_path))[0]
-        if not os.path.exists(f"output/{image_name}.png"):
+        if not os.path.exists(f"{output_folder}/{image_name}.png"):
             print(f"Processing {img_path}...")
             output_image = prepare_image(img_path)
-            cv2.imwrite(f"output/{image_name}.png", output_image)
-            print(f"Saved output/{image_name}.png")
+            cv2.imwrite(f"{output_folder}/{image_name}.png", output_image)
+            print(f"Saved display/{image_name}.png")
 
 def main():
     #image_path = "images/4.jpg"
