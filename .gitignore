@@ -1,0 +1,8 @@
+# Ignore everything inside images/
+images/*
+outputs/*
+venv/
+env/
+.venv/
+.env/
+

@@ -172,9 +172,9 @@ def process_all_images():
             print(f"Saved output/{image_name}.png")
 
 def main():
-    image_path = "images/4.jpg"
-    output_image = prepare_image(image_path)
-    #process_all_images()
+    #image_path = "images/4.jpg"
+    #output_image = prepare_image(image_path)
+    process_all_images()
 
 if __name__ == "__main__":
     main()
