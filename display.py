@@ -1,7 +1,7 @@
 import os
 import pygame
 import time
-from glob import glob
+import glob
 
 IMAGE_DIR = "/home/pi/images"  # Change to your image folder
 DISPLAY_TIME = 30              # Seconds per image
@@ -29,7 +29,7 @@ def find_usb_images():
 
 def load_image(path):
     img = pygame.image.load(path)
-    img = pygame.transform.scale(img, (info.current_w, info.current_h))
+    img = pygame.transform.scale(img, (1280, 800))
     return img
 
 def fade(screen, image, fade_in=True):
@@ -43,23 +43,32 @@ def fade(screen, image, fade_in=True):
 def main():
     pygame.init()
     info = pygame.display.Info()
-    screen = pygame.display.set_mode((info.current_w, info.current_h), pygame.FULLSCREEN)
+    screen = pygame.display.set_mode((1280, 800), pygame.FULLSCREEN)
     pygame.mouse.set_visible(False)
     image_files = find_usb_images()
 
     try:
-        while True:
-            for img_file in image_files:
-                img = load_image(img_file)
-                fade(screen, img, fade_in=True)
+        for img_file in image_files:
+            img = load_image(img_file)
+            print(f"Displaying image: {img_file}")
+            fade(screen, img, fade_in=True)
+                
             start_time = time.time()
-            while time.time() - start_time < DISPLAY_TIME:
+                
+            while time.time() - start_time < 5:
                 for event in pygame.event.get():
-                    if event.type == pygame.QUIT or (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE):
+                    if event.type == pygame.QUIT:
                         pygame.quit()
                         exit()
-                time.sleep(0.1)
-            fade(screen, img, fade_in=False)
+                    if event.type == pygame.KEYDOWN:
+                        print("Exiting on key press.")
+                        pygame.quit()
+                        exit()
+                time.sleep(0.01)
+        fade(screen, img, fade_in=False)
 
     except KeyboardInterrupt:
         pygame.quit()
+
+if __name__ == "__main__":
+    main()
