@@ -31,7 +31,7 @@ def find_usb_images():
             print(f"Found images folder on USB: {images_folder}")
 
             # Add all image files (jpg, png, tiff)
-            for ext in ("*.jpg", "*.png", "*.tif", "*.tiff"):
+            for ext in ("*.jpg", "*.jpeg", "*.png", "*.tif", "*.tiff"):
                 image_paths.extend(glob.glob(os.path.join(images_folder, ext)))
         else:
             print(f"No images folder found on USB: {drive_path}")
@@ -50,11 +50,14 @@ def resize_and_crop(img, target_size):
     new_w = int(w * scale)
     new_h = int(h * scale)
     print(f"Resizing from ({w}, {h}) to ({new_w}, {new_h})")
-    resized = cv2.resize(img, (800, new_h), interpolation=cv2.INTER_LINEAR)
-    
-    # Crop to target size (center crop)
-    start_y = (new_h - target_h) // 2
-    cropped = resized[start_y:start_y + target_h]
+    if w / h > target_w / target_h:
+        resized = cv2.resize(img, (new_w, target_h), interpolation=cv2.INTER_LINEAR)
+        start_x = (new_w - target_w) // 2
+        cropped = resized[:, start_x:start_x + target_w]
+    else:
+        resized = cv2.resize(img, (target_w, new_h), interpolation=cv2.INTER_LINEAR)
+        start_y = (new_h - target_h) // 2
+        cropped = resized[start_y:start_y + target_h, :]
     
     return cropped
 
@@ -208,7 +211,7 @@ def process_all_images():
             print(f"Saved display/{image_name}.png")
 
 def main():
-    #image_path = "images/4.jpg"
+    #image_path = "images/2001.jpg"
     #output_image = prepare_image(image_path)
     time.sleep(10)
     process_all_images()
