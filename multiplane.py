@@ -115,6 +115,12 @@ def soft_threshold_range(depth, low_thresh, high_thresh, rolloff, blur):
         mask = np.minimum(lower_ramp, upper_ramp)
 
     mask = despeckle(mask, kernel_size=3)
+    mask = mask * -1 + 1
+    kernel = np.ones((int(blur * 0.3), int(blur * 0.3)), np.uint8)
+    mask_uint8 = (mask * 255).astype(np.uint8)
+    expanded = cv2.dilate(mask_uint8, kernel)
+    mask = expanded.astype(np.float32) / 255.0
+    mask = mask * -1 + 1
     mask = cv2.GaussianBlur(mask, (blur, blur), 0)
     
     return mask
@@ -139,11 +145,12 @@ def magnify_image(image, viewer_distance, screen_distance):
     
 
 def stack_images(foreground, middleground, background):
-    foreground_flipped = cv2.flip(foreground, 0) * 0.33
-    middleground_flipped = cv2.flip(middleground, 0) * 0.83
-    background_flipped = cv2.flip(background, 0) * 1.0
+    foreground_flipped = cv2.flip(foreground, 0) * (0.33, 0.33, 0.33)
+    middleground_flipped = cv2.flip(middleground, 0) * (0.8, 0.9, 1.0)
+    background_flipped = cv2.flip(background, 0) * (2.8, 3.15, 3.5)
     combined = np.vstack((background_flipped, middleground_flipped, foreground_flipped))
     combined = cv2.rotate(combined, cv2.ROTATE_90_CLOCKWISE)
+    combined = np.clip(combined, 0, 1)
     combined_srgb = (combined ** (1/2.2) * 255.0).astype(np.uint8)
     return combined_srgb
 
@@ -157,12 +164,12 @@ def prepare_image(image_path):
     thresholds = threshold_multiotsu(depth, classes=3)
     t1, t2 = thresholds
     print("Thresholds:", t1, t2)
-    rolloff = 0.03
-    blur = 5
+    rolloff = 0.10
+    blur = 3
 
-    background_mask = soft_threshold_range(depth, 0, t1, rolloff, blur)
-    middleground_mask = soft_threshold_range(depth, t1, t2, rolloff, blur)
-    foreground_mask = soft_threshold_range(depth, t2, 1, rolloff, blur)
+    background_mask = soft_threshold_range(depth, 0, t1, rolloff, 35)
+    middleground_mask = soft_threshold_range(depth, t1, t2, rolloff, 25)
+    foreground_mask = soft_threshold_range(depth, t2, 1, rolloff, 5)
 
     combined_mask = foreground_mask + middleground_mask + background_mask
     print("combine mask max", combined_mask.max(), "min", combined_mask.min())
@@ -171,7 +178,7 @@ def prepare_image(image_path):
     middleground_image = apply_mask(linear_float_image, middleground_mask)
     foreground_image = apply_mask(linear_float_image, foreground_mask)
 
-    viewer_distance = 700.0
+    viewer_distance = 1000.0
     screen_1_distance = 72.6
     screen_2_distance = 145.2
 
@@ -188,8 +195,11 @@ def prepare_image(image_path):
     #cv2.imshow("background_mask", (background_mask * 255).astype(np.uint8))
     #cv2.imshow("middleground_mask", (middleground_mask * 255).astype(np.uint8))
     #cv2.imshow("foreground_mask", (foreground_mask * 255).astype(np.uint8))
-    #cv2.waitKey(0)
-    #cv2.destroyAllWindows()
+    cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    cv2.imshow("combined_image", combined_image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
 
     return combined_image
 
@@ -211,10 +221,10 @@ def process_all_images():
             print(f"Saved display/{image_name}.png")
 
 def main():
-    #image_path = "images/2001.jpg"
-    #output_image = prepare_image(image_path)
-    time.sleep(10)
-    process_all_images()
+    image_path = "/media/multiplane/30D6-C9B5/images/moonlanding2.jpg"
+    output_image = prepare_image(image_path)
+    #time.sleep(10)
+    #process_all_images()
 
 if __name__ == "__main__":
     main()
