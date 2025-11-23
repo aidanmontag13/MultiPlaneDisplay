@@ -195,11 +195,11 @@ def prepare_image(image_path):
     #cv2.imshow("background_mask", (background_mask * 255).astype(np.uint8))
     #cv2.imshow("middleground_mask", (middleground_mask * 255).astype(np.uint8))
     #cv2.imshow("foreground_mask", (foreground_mask * 255).astype(np.uint8))
-    cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
-    cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    cv2.imshow("combined_image", combined_image)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    #cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
+    #cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    #cv2.imshow("combined_image", combined_image)
+    #cv2.waitKey(0)
+    #cv2.destroyAllWindows()
 
     return combined_image
 
@@ -221,10 +221,10 @@ def process_all_images():
             print(f"Saved display/{image_name}.png")
 
 def main():
-    image_path = "/media/multiplane/30D6-C9B5/images/moonlanding2.jpg"
-    output_image = prepare_image(image_path)
-    #time.sleep(10)
-    #process_all_images()
+    #image_path = "/media/multiplane/30D6-C9B5/images/moonlanding2.jpg"
+    #output_image = prepare_image(image_path)
+    time.sleep(10)
+    process_all_images()
 
 if __name__ == "__main__":
     main()
