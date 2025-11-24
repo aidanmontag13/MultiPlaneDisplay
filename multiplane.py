@@ -92,19 +92,29 @@ def despeckle(mask, kernel_size):
     mask = mask * -1 + 1
     return mask
 
-def soft_threshold_range(depth, low_thresh, high_thresh, rolloff, blur):
+def blur_and_dilate(mask, blur_size):
+    mask = mask * -1 + 1
+    kernel = np.ones((int(blur_size * 0.3), int(blur_size * 0.3)), np.uint8)
+    mask_uint8 = (mask * 255).astype(np.uint8)
+    expanded = cv2.dilate(mask_uint8, kernel)
+    mask = expanded.astype(np.float32) / 255.0
+    mask = mask * -1 + 1
+    mask = cv2.GaussianBlur(mask, (blur_size, blur_size), 0)
+    return mask
+
+def soft_threshold_range(depth, low_thresh, high_thresh, rolloff_a, rolloff_b, blur):
     mask = np.zeros_like(depth, dtype=np.float32)
 
-    if rolloff == 0:
+    if rolloff_a == 0 and rolloff_b == 0:
         mask = ((depth >= low_thresh) & (depth <= high_thresh)).astype(np.float32)
-        mask = cv2.GaussianBlur(mask, (blur, blur), 0)
+        mask = blur_and_dilate(mask, blur)
         mask = despeckle(mask, kernel_size=3)
         return mask
     
-    lower_ramp = (depth - (low_thresh - 0.5 * rolloff)) / rolloff
+    lower_ramp = (depth - (low_thresh - 0.5 * rolloff_a)) / rolloff_a
     lower_ramp = np.clip(lower_ramp, 0, 1)
     
-    upper_ramp = ((high_thresh + 0.5 * rolloff) - depth) / rolloff
+    upper_ramp = ((high_thresh + 0.5 * rolloff_b) - depth) / rolloff_b
     upper_ramp = np.clip(upper_ramp, 0, 1)
     
     if low_thresh == 0:
@@ -115,13 +125,7 @@ def soft_threshold_range(depth, low_thresh, high_thresh, rolloff, blur):
         mask = np.minimum(lower_ramp, upper_ramp)
 
     mask = despeckle(mask, kernel_size=3)
-    mask = mask * -1 + 1
-    kernel = np.ones((int(blur * 0.3), int(blur * 0.3)), np.uint8)
-    mask_uint8 = (mask * 255).astype(np.uint8)
-    expanded = cv2.dilate(mask_uint8, kernel)
-    mask = expanded.astype(np.float32) / 255.0
-    mask = mask * -1 + 1
-    mask = cv2.GaussianBlur(mask, (blur, blur), 0)
+    mask = blur_and_dilate(mask, blur)
     
     return mask
 
@@ -164,12 +168,13 @@ def prepare_image(image_path):
     thresholds = threshold_multiotsu(depth, classes=3)
     t1, t2 = thresholds
     print("Thresholds:", t1, t2)
-    rolloff = 0.10
+    rolloff_a = 0.10
+    rolloff_b = 0.15
     blur = 3
 
-    background_mask = soft_threshold_range(depth, 0, t1, rolloff, 35)
-    middleground_mask = soft_threshold_range(depth, t1, t2, rolloff, 25)
-    foreground_mask = soft_threshold_range(depth, t2, 1, rolloff, 5)
+    background_mask = soft_threshold_range(depth, 0, t1, 0.0, rolloff_b, 35)
+    middleground_mask = soft_threshold_range(depth, t1, t2, rolloff_b, rolloff_a, 25)
+    foreground_mask = soft_threshold_range(depth, t2, 1, rolloff_a, 0, 5)
 
     combined_mask = foreground_mask + middleground_mask + background_mask
     print("combine mask max", combined_mask.max(), "min", combined_mask.min())
