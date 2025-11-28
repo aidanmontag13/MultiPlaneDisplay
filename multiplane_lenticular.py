@@ -111,6 +111,7 @@ def render_perspective(color, depth, offset, plane_depth):
 
     intrinsics = o3d.camera.PinholeCameraIntrinsic(w, h, fx, fy, cx, cy)
     pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsics)
+    pcd, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
 
     # Shift + rotate
     translation = np.array([-offset, 0, 0])
@@ -146,6 +147,14 @@ def render_perspective(color, depth, offset, plane_depth):
         if z_depth[i] < depth_buffer[y_proj[i], x_proj[i]]:
             warped[y_proj[i], x_proj[i]] = colors_valid[i]
             depth_buffer[y_proj[i], x_proj[i]] = z_depth[i]
+
+    mask = (depth_buffer == np.inf).astype(np.uint8)
+    mask = 1 - mask
+
+    print("mask max", np.max(mask))
+    print("mask min", np.min(mask))
+
+    warped = inpaint_mask(warped, mask)
     
     return warped
 
@@ -179,7 +188,7 @@ def blur_and_dilate(mask, blur_size):
     mask = cv2.GaussianBlur(mask, (blur_size, blur_size), 0)
     return mask
 
-def soft_threshold_range(depth, low_thresh, high_thresh, rolloff_a, rolloff_b, blur):
+def create_mask(depth, low_thresh, high_thresh, rolloff_a, rolloff_b, blur):
     mask = np.zeros_like(depth, dtype=np.float32)
 
     if rolloff_a == 0 and rolloff_b == 0:
@@ -210,8 +219,8 @@ def soft_threshold_range(depth, low_thresh, high_thresh, rolloff_a, rolloff_b, b
     return mask
 
 def create_parrallax_mask(depth, low_thresh, high_thresh, rolloff_a, rolloff_b, blur, screen_distance, eye_separation, viewer_distance):
-    close_mask = soft_threshold_range(depth, low_thresh, 1, rolloff_a, 0, blur)
-    far_mask = soft_threshold_range(depth, 0, high_thresh, 0, rolloff_b, blur)
+    close_mask = create_mask(depth, low_thresh, 1, rolloff_a, 0, blur)
+    far_mask = create_mask(depth, 0, high_thresh, 0, rolloff_b, blur)
     parallax_offset = (eye_separation * screen_distance) / viewer_distance
     print("Parallax offset (meters):", parallax_offset)
     scale_factor = 800 / 0.13596  # screen width in meters
@@ -286,8 +295,8 @@ def prepare_image(image_path):
     rolloff_b = 0.0
     blur = 3
 
-    binary_middleground_mask = soft_threshold_range(depth, t1 - rolloff_a / 2, 1, 0.0, 0.0, 1)
-    binary_background_mask = soft_threshold_range(depth, t2 - rolloff_b / 2, 1, 0.0, 0.0, 1)
+    binary_middleground_mask = create_mask(depth, t1 - rolloff_a / 2, 1, 0.0, 0.0, 1)
+    binary_background_mask = create_mask(depth, t2 - rolloff_b / 2, 1, 0.0, 0.0, 1)
 
     inpainted_middleground = inpaint_mask(linear_float_image, binary_middleground_mask)
     inpainted_background = inpaint_mask(linear_float_image, binary_background_mask)
@@ -296,13 +305,13 @@ def prepare_image(image_path):
     screen_1_distance = 72.6
     screen_2_distance = 145.2
 
-    foreground_mask = soft_threshold_range(depth, 0, t1, 0.0, rolloff_b, 35)
+    foreground_mask = create_mask(depth, 0, t1, 0.0, rolloff_b, 35)
 
-    middleground_mask = soft_threshold_range(depth, t1, t2, rolloff_b, rolloff_a, 25)
+    middleground_mask = create_mask(depth, t1, t2, rolloff_b, rolloff_a, 25)
     left_middleground_mask = create_parrallax_mask(depth, t1, t2, rolloff_b, rolloff_a, 25, screen_1_distance, 0.06, viewer_distance)
     right_middleground_mask = create_parrallax_mask(depth, t1, t2, rolloff_b, rolloff_a, 25, screen_1_distance, -0.06, viewer_distance)
 
-    background_mask = soft_threshold_range(depth, t2, 1, rolloff_a, 0, 5)
+    background_mask = create_mask(depth, t2, 1, rolloff_a, 0, 5)
     left_background_mask = create_parrallax_mask(depth, t2, 1, rolloff_a, 0, 5, screen_2_distance, 0.06, viewer_distance + screen_1_distance)
     right_background_mask = create_parrallax_mask(depth, t2, 1, rolloff_a, 0, 5, screen_2_distance, -0.06, viewer_distance + screen_1_distance)
 
@@ -310,7 +319,8 @@ def prepare_image(image_path):
     print("combine mask max", combined_mask.max(), "min", combined_mask.min())
 
     foreground_image = apply_mask(linear_float_image, foreground_mask)
-    left_foreground_image = render_perspective(linear_float_image, depth, -0.06, 0)
+    left_foreground_image = render_perspective(foreground_image, depth, -0.06, 0)
+    right_foreground_image = render_perspective(linear_float_image, depth, 0.06, 0)
 
     middleground_image = apply_mask(linear_float_image, middleground_mask)
     left_middleground_image = apply_mask(inpainted_middleground, left_middleground_mask)
@@ -337,7 +347,7 @@ def prepare_image(image_path):
 
     #cv2.imshow("original_image", (overlay ** (1/2.2) * 255).astype(np.uint8))
     cv2.imshow("depth_map", (depth * 255).astype(np.uint8))
-    cv2.imshow("foreground image", (foreground_image ** (1/2.2) * 255).astype(np.uint8))
+    cv2.imshow("foreground image", (linear_float_image ** (1/2.2) * 255).astype(np.uint8))
     cv2.imshow("left foreground image", (left_foreground_image ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("middleground_image", (middleground_image ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("left_middleground_image", (left_middleground_image ** (1/2.2) * 255).astype(np.uint8))
@@ -382,7 +392,7 @@ def process_all_images():
             print(f"Saved display/{image_name}.png")
 
 def main():
-    image_path = "images/raiders.jpg"
+    image_path = "images/tiger.jpeg"
     output_image = prepare_image(image_path)
     #time.sleep(10)
     #process_all_images()
