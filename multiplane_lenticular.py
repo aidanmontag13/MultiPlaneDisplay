@@ -85,13 +85,13 @@ def infer(inp):
     depth = (depth - depth.min()) / (depth.max() - depth.min())
     return depth
 
-def render_perspective(color, depth, offset, plane_depth):
+def render_perspective(color, depth, viewer_distance, offset, plane_depth):
     depth_range = 0.21718
-    viewer_distance = 0.7
+    #viewer_distance = 0.7
     display_width = 0.13596
 
-    depth = depth - np.min(depth)
-    depth = depth / np.max(depth)
+    #depth = depth - np.min(depth)
+    #depth = depth / np.max(depth)
     depth = depth * depth_range + viewer_distance + plane_depth
 
     h, w = color.shape[:2]
@@ -245,10 +245,6 @@ def inpaint_mask(image, mask):
     mask_uint8 = (mask * 255).astype(np.uint8)
     kernel = np.ones((int(3), int(3)), np.uint8)
     mask = cv2.dilate(mask_uint8, kernel)
-    #cv2.imshow("inpaint_mask", mask)
-    mask_vis = cv2.cvtColor(mask.astype(np.uint8), cv2.COLOR_GRAY2BGR)
-    overlay = ((image * 255).astype(np.uint8) // 2) + (mask_vis // 2)
-    #cv2.imshow("overlay", overlay)
     inpainted = cv2.inpaint((image * 255).astype(np.uint8), mask_uint8, 3, cv2.INPAINT_TELEA)
     inpainted = inpainted.astype(np.float32) / 255.0
     return inpainted
@@ -264,6 +260,49 @@ def magnify_image(image, viewer_distance, screen_distance):
     start_x = (new_w - w) // 2
     cropped = magnified[start_y:start_y + h, start_x:start_x + w]
     return cropped
+def reproject_2D(color, offset, plane_depth):
+    depth_range = 0.21718
+    viewer_distance = 0.7
+    display_width = 0.13596
+
+    h, w = color.shape[:2]
+
+    fx = (w / display_width) * (viewer_distance + plane_depth)
+    fy = fx
+    cx = w / 2
+    cy = h / 2
+
+    # Intrinsic matrix
+    K = np.array([
+        [fx, 0, cx],
+        [0, fy, cy],
+        [0,  0,  1]
+    ])
+
+    K_inv = np.linalg.inv(K)
+
+    # Rotation angle based on offset
+    rotation_angle = np.arctan(offset / (viewer_distance + plane_depth))
+
+    R = np.array([
+        [ np.cos(rotation_angle), 0, np.sin(rotation_angle)],
+        [ 0,                      1, 0                     ],
+        [-np.sin(rotation_angle), 0, np.cos(rotation_angle)]
+    ])
+
+    # For a plane at depth d
+    d = viewer_distance + plane_depth
+    
+    H = K @ R @ K_inv
+    
+    H[0, 2] += -offset * fx / d
+    
+    # Warp image using built-in OpenCV
+    warped = cv2.warpPerspective(
+        color, H, (w, h), flags=cv2.INTER_LINEAR
+    )
+
+    return warped
     
 
 def stack_images(foreground, middleground, background):
@@ -319,8 +358,11 @@ def prepare_image(image_path):
     print("combine mask max", combined_mask.max(), "min", combined_mask.min())
 
     foreground_image = apply_mask(linear_float_image, foreground_mask)
-    left_foreground_image = render_perspective(foreground_image, depth, -0.06, 0)
-    right_foreground_image = render_perspective(linear_float_image, depth, 0.06, 0)
+    #left_foreground_image = render_perspective(foreground_image, depth, 0.7, -0.06, 0)
+    empty_depth = np.zeros_like(linear_float_image, dtype=np.float32)
+    left_foreground_image = render_perspective(linear_float_image, empty_depth, 0.7, -0.7, 0)
+    left_foreground_image_2D = reproject_2D(linear_float_image, -0.7, 0)
+    right_foreground_image = render_perspective(foreground_image, depth, 0.7, 0.06, 0)
 
     middleground_image = apply_mask(linear_float_image, middleground_mask)
     left_middleground_image = apply_mask(inpainted_middleground, left_middleground_mask)
@@ -337,18 +379,22 @@ def prepare_image(image_path):
     left_background_image = magnify_image(left_background_image, viewer_distance, screen_2_distance)
     right_background_image = magnify_image(right_background_image, viewer_distance, screen_2_distance)
 
-    interleaved_middleground_image = lenticular_interleave(left_middleground_image, middleground_image, right_middleground_image)
+    interleaved_foreground_image = lenticular_interleave(right_foreground_image, foreground_image, left_foreground_image)
 
-    interleaved_background_image = lenticular_interleave(left_background_image, background_image, right_background_image)
+    interleaved_middleground_image = lenticular_interleave(right_middleground_image, middleground_image, left_middleground_image)
+
+    interleaved_background_image = lenticular_interleave(right_background_image, background_image, left_background_image)
 
     cv2.imshow("interleaved_middleground_image", (interleaved_middleground_image ** (1/2.2) * 255).astype(np.uint8))
 
-    combined_image = stack_images(foreground_image, interleaved_middleground_image, interleaved_background_image)
+    combined_image = stack_images(interleaved_foreground_image, interleaved_middleground_image, interleaved_background_image)
 
     #cv2.imshow("original_image", (overlay ** (1/2.2) * 255).astype(np.uint8))
-    cv2.imshow("depth_map", (depth * 255).astype(np.uint8))
-    cv2.imshow("foreground image", (linear_float_image ** (1/2.2) * 255).astype(np.uint8))
+    #cv2.imshow("depth_map", (depth * 255).astype(np.uint8))
+    #cv2.imshow("foreground image", (foreground_image ** (1/2.2) * 255).astype(np.uint8))
     cv2.imshow("left foreground image", (left_foreground_image ** (1/2.2) * 255).astype(np.uint8))
+    cv2.imshow("left foreground image 2D", (left_foreground_image_2D ** (1/2.2) * 255).astype(np.uint8))
+    #cv2.imshow("rigth foreground image", (right_foreground_image ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("middleground_image", (middleground_image ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("left_middleground_image", (left_middleground_image ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("right_middleground_image", (right_middleground_image ** (1/2.2) * 255).astype(np.uint8))
@@ -368,7 +414,7 @@ def prepare_image(image_path):
     #cv2.imshow("foreground_mask", (foreground_mask * 255).astype(np.uint8))
     #cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
     #cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-    cv2.imshow("combined_image", combined_image)
+    #cv2.imshow("combined_image", combined_image)
     cv2.waitKey(0)
     cv2.destroyAllWindows()
 
@@ -392,7 +438,7 @@ def process_all_images():
             print(f"Saved display/{image_name}.png")
 
 def main():
-    image_path = "images/tiger.jpeg"
+    image_path = "images/2001.jpg"
     output_image = prepare_image(image_path)
     #time.sleep(10)
     #process_all_images()
