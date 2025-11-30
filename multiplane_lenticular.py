@@ -173,8 +173,9 @@ def render_perspective(color, depth, viewer_position):
     print("mask min", np.min(mask))
 
     warped = inpaint_mask(warped, mask)
+    depth = inpaint_mask(depth_buffer, mask)
     
-    return warped
+    return warped, depth
 
 def lenticular_interleave(image1, image2, image3):
     h, w = image1.shape[:2]
@@ -319,7 +320,9 @@ def reproject_2D(color, viewer_position, plane_depth):
     origin = o3d.geometry.TriangleMesh.create_coordinate_frame()
 
     # Step 1: Project plane to focal length distance
-    t1 = np.array([0, 0, -1])
+    offset_depth = 1 - (plane_depth / projection_distance)
+    print("offset depth", offset_depth)
+    t1 = np.array([0, 0, -offset_depth])
     pcd.translate(t1, relative=True)
     
     yaw_angle = np.arctan2(viewer_position[0], viewer_position[1])
@@ -330,11 +333,12 @@ def reproject_2D(color, viewer_position, plane_depth):
 
     # find offset
     viewer_distance = np.linalg.norm(viewer_position) / projection_distance
+    print("viewer distance", viewer_distance)
     print("viwer distance", viewer_distance)
     offset_translation = np.array([0, 0, viewer_distance])
     pcd.translate(offset_translation, relative=True)
 
-    o3d.visualization.draw_geometries([pcd, pcd_og])
+    #o3d.visualization.draw_geometries([pcd, pcd_og])
     
     transformed = np.asarray(pcd.points)  # (4×3)
 
@@ -360,7 +364,15 @@ def stack_images(foreground, middleground, background):
     combined_srgb = (combined ** (1/2.2) * 255.0).astype(np.uint8)
     return combined_srgb
 
-def prepare_image(image_path):
+def prepare_view(image, depth, viewer_position, plane_depth, t1, t2, rolloff_a, rolloff_b, blur):
+    perspective_image, perspective_depth = render_perspective(image, depth, viewer_position)
+    mask = create_mask(perspective_depth, t1, t2, rolloff_a, rolloff_b, blur)
+    masked_image = apply_mask(perspective_image, mask)
+    warped_image = reproject_2D(masked_image, viewer_position, plane_depth)
+
+    return warped_image
+
+def prepare_image_2D(image_path):
     image = cv2.imread(image_path)
     image = resize_and_crop(image, (800, 426))
     linear_float_image = (image.astype(np.float32) / 255.0) ** 2.2
@@ -372,8 +384,6 @@ def prepare_image(image_path):
     thresholds = threshold_multiotsu(depth, classes=3)
 
     t1, t2 = thresholds
-    #t1 = 0.33
-    #t2 = 0.66
     print("Thresholds:", t1, t2)
     rolloff_a = 0.0
     rolloff_b = 0.0
@@ -385,9 +395,9 @@ def prepare_image(image_path):
     inpainted_middleground = inpaint_mask(linear_float_image, binary_middleground_mask)
     inpainted_background = inpaint_mask(linear_float_image, binary_background_mask)
 
-    viewer_distance = 1000.0
-    screen_1_distance = 72.6
-    screen_2_distance = 145.2
+    viewer_distance = 1.000
+    screen_1_distance = 0.07239
+    screen_2_distance = 0.1452
 
     foreground_mask = create_mask(depth, 0, t1, 0.0, rolloff_b, 35)
 
@@ -403,12 +413,6 @@ def prepare_image(image_path):
     print("combine mask max", combined_mask.max(), "min", combined_mask.min())
 
     foreground_image = apply_mask(linear_float_image, foreground_mask)
-    #left_foreground_image = render_perspective(foreground_image, depth, 0.7, -0.06, 0)
-    empty_depth = np.zeros_like(linear_float_image, dtype=np.float32)
-    left_foreground_image = render_perspective(linear_float_image, depth, [-0.7, 0.7, 0.0])
-    left_foreground_2D = reproject_2D(left_foreground_image, [-0.7, 0.7, 0.0], 0)
-    right_foreground_image = render_perspective(linear_float_image, depth, [0.06, 0.7, 0.0])
-    right_foreground_2D = reproject_2D(right_foreground_image, [0.06, 0.7, 0.0], 0)
 
     middleground_image = apply_mask(linear_float_image, middleground_mask)
     left_middleground_image = apply_mask(inpainted_middleground, left_middleground_mask)
@@ -425,21 +429,17 @@ def prepare_image(image_path):
     left_background_image = magnify_image(left_background_image, viewer_distance, screen_2_distance)
     right_background_image = magnify_image(right_background_image, viewer_distance, screen_2_distance)
 
-    #interleaved_foreground_image = lenticular_interleave(right_foreground_image, foreground_image, left_foreground_image)
-
     interleaved_middleground_image = lenticular_interleave(right_middleground_image, middleground_image, left_middleground_image)
 
     interleaved_background_image = lenticular_interleave(right_background_image, background_image, left_background_image)
 
     cv2.imshow("interleaved_middleground_image", (interleaved_middleground_image ** (1/2.2) * 255).astype(np.uint8))
 
-    #combined_image = stack_images(interleaved_foreground_image, interleaved_middleground_image, interleaved_background_image)
+    combined_image = stack_images(foreground_image, interleaved_middleground_image, interleaved_background_image)
 
     #cv2.imshow("original_image", (overlay ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("depth_map", (depth * 255).astype(np.uint8))
     cv2.imshow("foreground image", (linear_float_image ** (1/2.2) * 255).astype(np.uint8))
-    cv2.imshow("left foreground image", (left_foreground_image ** (1/2.2) * 255).astype(np.uint8))
-    cv2.imshow("2D warped image", (left_foreground_2D ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("left foreground image 2D", (left_foreground_image_2D ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("rigth foreground image", (right_foreground_image ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("middleground_image", (middleground_image ** (1/2.2) * 255).astype(np.uint8))
@@ -467,6 +467,68 @@ def prepare_image(image_path):
 
     return combined_image
 
+def prepare_image_3D(image_path):
+    image = cv2.imread(image_path)
+    image = resize_and_crop(image, (800, 426))
+    linear_float_image = (image.astype(np.float32) / 255.0) ** 2.2
+    inp = preprocess(image)
+    depth = infer(inp)
+    depth = depth * -1 + 1
+    depth = depth ** (2)
+
+    thresholds = threshold_multiotsu(depth, classes=3)
+
+    viewer_distance = 0.700
+    screen_0_distance = 0.0
+    screen_1_distance = 0.07239
+    screen_2_distance = 0.1452
+
+    t1, t2 = thresholds
+    t1 = t1 * 0.21759 + viewer_distance
+    t2 = t2 * 0.21759 + viewer_distance
+    #t1 = screen_1_distance + viewer_distance
+    #t2 = screen_2_distance + viewer_distance
+    t3 = 100
+    print("Thresholds:", t1, t2)
+    rolloff_a = screen_1_distance / 4
+    rolloff_b = screen_1_distance / 4
+    #rolloff_a = 0
+    #rolloff_b = 0
+    blur = 3
+
+    foreground_center = prepare_view(linear_float_image, depth, [0.0, 0.7, 0.0], screen_0_distance, 0, t1, 0, rolloff_a, 1)
+    foreground_left = prepare_view(linear_float_image, depth, [-0.06, 0.7, 0.0], screen_0_distance, 0, t1, 0, rolloff_a, 1)
+    foreground_right = prepare_view(linear_float_image, depth, [0.06, 0.7, 0.0], screen_0_distance, 0, t1, 0, rolloff_a, 1)
+    interleaved_foreground_image = lenticular_interleave(foreground_right, foreground_center, foreground_left)
+    cv2.imshow("foreground center", (foreground_center ** (1/2.2) * 255).astype(np.uint8))
+    cv2.imshow("foreground left", (foreground_left ** (1/2.2) * 255).astype(np.uint8))
+    #cv2.imshow("foreground right", (foreground_right ** (1/2.2) * 255).astype(np.uint8))
+
+    middleground_center = prepare_view(linear_float_image, depth, [0.0, 0.7, 0.0], screen_1_distance, t1, t2, rolloff_a, rolloff_b, 1)
+    middleground_left = prepare_view(linear_float_image, depth, [-0.06, 0.7, 0.0], screen_1_distance, t1, t2, rolloff_a, rolloff_b, 1)
+    middleground_right = prepare_view(linear_float_image, depth, [0.06, 0.7, 0.0], screen_1_distance, t1, t2, rolloff_a, rolloff_b, 1)
+    interleaved_middleground_image = lenticular_interleave(middleground_right, middleground_center, middleground_left)
+    cv2.imshow("middleground center", (middleground_center ** (1/2.2) * 255).astype(np.uint8))
+    cv2.imshow("middleground left", (middleground_left ** (1/2.2) * 255).astype(np.uint8))
+    #cv2.imshow("middleground right", (middleground_right ** (1/2.2) * 255).astype(np.uint8))
+
+    background_center = prepare_view(linear_float_image, depth, [0.0, 0.7, 0.0], screen_2_distance, t2, t3, rolloff_b, 0, 1)
+    background_left = prepare_view(linear_float_image, depth, [-0.06, 0.7, 0.0], screen_2_distance, t2, t3, rolloff_b, 0, 1)
+    background_right = prepare_view(linear_float_image, depth, [0.06, 0.7, 0.0], screen_2_distance, t2, t3, rolloff_b, 0, 1)
+    interleaved_background_image = lenticular_interleave(middleground_right, middleground_center, middleground_left)
+    cv2.imshow("background center", (background_center ** (1/2.2) * 255).astype(np.uint8))
+    cv2.imshow("background left", (background_left ** (1/2.2) * 255).astype(np.uint8))
+    #cv2.imshow("background right", (background_right ** (1/2.2) * 255).astype(np.uint8))
+
+    combined_image = stack_images(interleaved_foreground_image, interleaved_middleground_image, interleaved_background_image)
+    #cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
+    #cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+    #cv2.imshow("combined_image", combined_image)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+    return combined_image
+
 def process_all_images():
     images, output_folder = find_usb_images()
     
@@ -485,8 +547,8 @@ def process_all_images():
             print(f"Saved display/{image_name}.png")
 
 def main():
-    image_path = "images/2001.jpg"
-    output_image = prepare_image(image_path)
+    image_path = "images/jurassic.jpg"
+    output_image = prepare_image_3D(image_path)
     #time.sleep(10)
     #process_all_images()
 
