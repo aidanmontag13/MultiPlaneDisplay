@@ -85,19 +85,19 @@ def infer(inp):
     depth = (depth - depth.min()) / (depth.max() - depth.min())
     return depth
 
-def render_perspective(color, depth, viewer_distance, offset, plane_depth):
+def render_perspective(color, depth, viewer_position):
     depth_range = 0.21718
-    #viewer_distance = 0.7
+    projection_distance = 0.7
     display_width = 0.13596
 
     #depth = depth - np.min(depth)
     #depth = depth / np.max(depth)
-    depth = depth * depth_range + viewer_distance + plane_depth
+    depth = depth * depth_range + projection_distance
 
     h, w = color.shape[:2]
     depth = cv2.resize(depth, (w, h), interpolation=cv2.INTER_LINEAR)
 
-    fx = (w / display_width) * viewer_distance
+    fx = (w / display_width) * projection_distance
     fy = fx
     cx = w / 2
     cy = h / 2
@@ -110,15 +110,33 @@ def render_perspective(color, depth, viewer_distance, offset, plane_depth):
     )
 
     intrinsics = o3d.camera.PinholeCameraIntrinsic(w, h, fx, fy, cx, cy)
+    pcd_og = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsics)
     pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsics)
     pcd, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
 
     # Shift + rotate
-    translation = np.array([-offset, 0, 0])
+
+    # move point cloud to center
+    translation = np.array([0, 0, -projection_distance])
     pcd.translate(translation, relative=True)
-    rotation_angle = np.arctan(offset / viewer_distance)
-    rotation_matrix = pcd.get_rotation_matrix_from_xyz((0, rotation_angle, 0))
+    pcd_og.translate(translation, relative=True)
+
+    # calculate pitch and yaw angle to keep camera centered
+    yaw_angle = np.arctan((viewer_position[0]) / viewer_position[1])
+    pitch_angle = np.arctan((viewer_position[2]) / viewer_position[1])
+
+    # rotate object
+    rotation_matrix = pcd.get_rotation_matrix_from_xyz((pitch_angle, yaw_angle, 0))
     pcd.rotate(rotation_matrix, center=(0, 0, 0))
+
+    # find offset
+    viewer_distance = np.linalg.norm(viewer_position)
+    offset_translation = np.array([0, 0, viewer_distance])
+    pcd.translate(offset_translation, relative=True)
+
+    origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.1)
+
+    #o3d.visualization.draw_geometries([pcd, pcd_og, origin])
 
     # Project point cloud back to image plane
     points = np.asarray(pcd.points)
@@ -260,48 +278,75 @@ def magnify_image(image, viewer_distance, screen_distance):
     start_x = (new_w - w) // 2
     cropped = magnified[start_y:start_y + h, start_x:start_x + w]
     return cropped
-def reproject_2D(color, offset, plane_depth):
-    depth_range = 0.21718
-    viewer_distance = 0.7
+
+def reproject_2D(color, viewer_position, plane_depth):
     display_width = 0.13596
-
+    projection_distance = 0.7
+    
     h, w = color.shape[:2]
-
-    fx = (w / display_width) * (viewer_distance + plane_depth)
+    fx = (w / display_width) * projection_distance
     fy = fx
     cx = w / 2
     cy = h / 2
-
+    
     # Intrinsic matrix
     K = np.array([
         [fx, 0, cx],
         [0, fy, cy],
-        [0,  0,  1]
+        [0, 0, 1]
     ])
+    
+    src_points = np.float32([
+        [0, 0],           # Top-left
+        [w, 0],           # Top-right
+        [w, h],           # Bottom-right
+        [0, h]            # Bottom-left
+    ])
+
+    pts_h = np.hstack([src_points, np.ones((src_points.shape[0], 1))])
 
     K_inv = np.linalg.inv(K)
 
-    # Rotation angle based on offset
-    rotation_angle = np.arctan(offset / (viewer_distance + plane_depth))
+    pts_3d = (K_inv @ pts_h.T).T
 
-    R = np.array([
-        [ np.cos(rotation_angle), 0, np.sin(rotation_angle)],
-        [ 0,                      1, 0                     ],
-        [-np.sin(rotation_angle), 0, np.cos(rotation_angle)]
-    ])
+    print("3d points", pts_3d)
 
-    # For a plane at depth d
-    d = viewer_distance + plane_depth
-    
-    H = K @ R @ K_inv
-    
-    H[0, 2] += -offset * fx / d
-    
-    # Warp image using built-in OpenCV
-    warped = cv2.warpPerspective(
-        color, H, (w, h), flags=cv2.INTER_LINEAR
-    )
+    # Create Open3D point cloud
+    pcd = o3d.geometry.PointCloud()
+    pcd.points = o3d.utility.Vector3dVector(pts_3d)
+    pcd_og = o3d.geometry.PointCloud()
+    pcd_og.points = o3d.utility.Vector3dVector(pts_3d)
+    origin = o3d.geometry.TriangleMesh.create_coordinate_frame()
 
+    # Step 1: Project plane to focal length distance
+    t1 = np.array([0, 0, -1])
+    pcd.translate(t1, relative=True)
+    
+    yaw_angle = np.arctan2(viewer_position[0], viewer_position[1])
+    pitch_angle = np.arctan2(viewer_position[2], viewer_position[1])
+
+    rotation_matrix = pcd.get_rotation_matrix_from_xyz((pitch_angle, yaw_angle, 0))
+    pcd.rotate(rotation_matrix, center=(0, 0, 0))
+
+    # find offset
+    viewer_distance = np.linalg.norm(viewer_position) / projection_distance
+    print("viwer distance", viewer_distance)
+    offset_translation = np.array([0, 0, viewer_distance])
+    pcd.translate(offset_translation, relative=True)
+
+    o3d.visualization.draw_geometries([pcd, pcd_og])
+    
+    transformed = np.asarray(pcd.points)  # (4×3)
+
+    # ---- 7. Reproject 3D → 2D ----
+    proj = (K @ transformed.T).T
+    dst_pts = proj[:, :2] / proj[:, 2:3]     # normalize by Z
+    
+    # ---- 8. Compute homography and warp ----
+    H = cv2.getPerspectiveTransform(src_points, dst_pts.astype(np.float32))
+    H_inv = np.linalg.inv(H)
+    warped = cv2.warpPerspective(color, H_inv, (w, h))
+    
     return warped
     
 
@@ -360,9 +405,10 @@ def prepare_image(image_path):
     foreground_image = apply_mask(linear_float_image, foreground_mask)
     #left_foreground_image = render_perspective(foreground_image, depth, 0.7, -0.06, 0)
     empty_depth = np.zeros_like(linear_float_image, dtype=np.float32)
-    left_foreground_image = render_perspective(linear_float_image, empty_depth, 0.7, -0.7, 0)
-    left_foreground_image_2D = reproject_2D(linear_float_image, -0.7, 0)
-    right_foreground_image = render_perspective(foreground_image, depth, 0.7, 0.06, 0)
+    left_foreground_image = render_perspective(linear_float_image, depth, [-0.7, 0.7, 0.0])
+    left_foreground_2D = reproject_2D(left_foreground_image, [-0.7, 0.7, 0.0], 0)
+    right_foreground_image = render_perspective(linear_float_image, depth, [0.06, 0.7, 0.0])
+    right_foreground_2D = reproject_2D(right_foreground_image, [0.06, 0.7, 0.0], 0)
 
     middleground_image = apply_mask(linear_float_image, middleground_mask)
     left_middleground_image = apply_mask(inpainted_middleground, left_middleground_mask)
@@ -379,7 +425,7 @@ def prepare_image(image_path):
     left_background_image = magnify_image(left_background_image, viewer_distance, screen_2_distance)
     right_background_image = magnify_image(right_background_image, viewer_distance, screen_2_distance)
 
-    interleaved_foreground_image = lenticular_interleave(right_foreground_image, foreground_image, left_foreground_image)
+    #interleaved_foreground_image = lenticular_interleave(right_foreground_image, foreground_image, left_foreground_image)
 
     interleaved_middleground_image = lenticular_interleave(right_middleground_image, middleground_image, left_middleground_image)
 
@@ -387,13 +433,14 @@ def prepare_image(image_path):
 
     cv2.imshow("interleaved_middleground_image", (interleaved_middleground_image ** (1/2.2) * 255).astype(np.uint8))
 
-    combined_image = stack_images(interleaved_foreground_image, interleaved_middleground_image, interleaved_background_image)
+    #combined_image = stack_images(interleaved_foreground_image, interleaved_middleground_image, interleaved_background_image)
 
     #cv2.imshow("original_image", (overlay ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("depth_map", (depth * 255).astype(np.uint8))
-    #cv2.imshow("foreground image", (foreground_image ** (1/2.2) * 255).astype(np.uint8))
+    cv2.imshow("foreground image", (linear_float_image ** (1/2.2) * 255).astype(np.uint8))
     cv2.imshow("left foreground image", (left_foreground_image ** (1/2.2) * 255).astype(np.uint8))
-    cv2.imshow("left foreground image 2D", (left_foreground_image_2D ** (1/2.2) * 255).astype(np.uint8))
+    cv2.imshow("2D warped image", (left_foreground_2D ** (1/2.2) * 255).astype(np.uint8))
+    #cv2.imshow("left foreground image 2D", (left_foreground_image_2D ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("rigth foreground image", (right_foreground_image ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("middleground_image", (middleground_image ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("left_middleground_image", (left_middleground_image ** (1/2.2) * 255).astype(np.uint8))
