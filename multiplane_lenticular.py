@@ -102,7 +102,7 @@ def render_perspective(color, depth, viewer_position):
     cx = w / 2
     cy = h / 2
 
-    color_o3d = o3d.geometry.Image((color * 255).astype(np.uint8))
+    color_o3d = o3d.geometry.Image((color).astype(np.uint8))
     depth_o3d = o3d.geometry.Image((depth * 1000).astype(np.uint16))
 
     rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
@@ -174,6 +174,11 @@ def render_perspective(color, depth, viewer_position):
 
     warped = inpaint_mask(warped, mask)
     depth = inpaint_mask(depth_buffer, mask)
+
+    #cv2.imshow("foreground left depth", (depth_buffer / np.max(depth) * 255).astype(np.uint8))
+    ##cv2.imshow("foreground left depth filled", (depth / np.max(depth) * 255).astype(np.uint8))
+    #cv2.waitKey(0)
+    #cv2.destroyAllWindows()
     
     return warped, depth
 
@@ -264,7 +269,7 @@ def inpaint_mask(image, mask):
     mask_uint8 = (mask * 255).astype(np.uint8)
     kernel = np.ones((int(3), int(3)), np.uint8)
     mask = cv2.dilate(mask_uint8, kernel)
-    inpainted = cv2.inpaint((image * 255).astype(np.uint8), mask_uint8, 3, cv2.INPAINT_TELEA)
+    inpainted = cv2.inpaint((image * 255).astype(np.uint8), mask_uint8, 5, cv2.INPAINT_NS)
     inpainted = inpainted.astype(np.float32) / 255.0
     return inpainted
 
@@ -365,9 +370,11 @@ def stack_images(foreground, middleground, background):
     return combined_srgb
 
 def prepare_view(image, depth, viewer_position, plane_depth, t1, t2, rolloff_a, rolloff_b, blur):
+    print("image max", np.max(image))
     perspective_image, perspective_depth = render_perspective(image, depth, viewer_position)
+    linear_perspective_image = (perspective_image.astype(np.float32)) ** 2.2
     mask = create_mask(perspective_depth, t1, t2, rolloff_a, rolloff_b, blur)
-    masked_image = apply_mask(perspective_image, mask)
+    masked_image = apply_mask(linear_perspective_image, mask)
     warped_image = reproject_2D(masked_image, viewer_position, plane_depth)
 
     return warped_image
@@ -470,7 +477,7 @@ def prepare_image_2D(image_path):
 def prepare_image_3D(image_path):
     image = cv2.imread(image_path)
     image = resize_and_crop(image, (800, 426))
-    linear_float_image = (image.astype(np.float32) / 255.0) ** 2.2
+    linear_float_image = (image.astype(np.float32) / 255.0)
     inp = preprocess(image)
     depth = infer(inp)
     depth = depth * -1 + 1
@@ -496,26 +503,26 @@ def prepare_image_3D(image_path):
     #rolloff_b = 0
     blur = 3
 
-    foreground_center = prepare_view(linear_float_image, depth, [0.0, 0.7, 0.0], screen_0_distance, 0, t1, 0, rolloff_a, 1)
-    foreground_left = prepare_view(linear_float_image, depth, [-0.06, 0.7, 0.0], screen_0_distance, 0, t1, 0, rolloff_a, 1)
-    foreground_right = prepare_view(linear_float_image, depth, [0.06, 0.7, 0.0], screen_0_distance, 0, t1, 0, rolloff_a, 1)
+    foreground_center = prepare_view(image, depth, [0.0, 0.7, 0.0], screen_0_distance, 0, t1, 0, rolloff_a, 3)
+    foreground_left = prepare_view(image, depth, [-0.06, 0.7, 0.0], screen_0_distance, 0, t1, 0, rolloff_a, 3)
+    foreground_right = prepare_view(image, depth, [0.06, 0.7, 0.0], screen_0_distance, 0, t1, 0, rolloff_a, 3)
     interleaved_foreground_image = lenticular_interleave(foreground_right, foreground_center, foreground_left)
     cv2.imshow("foreground center", (foreground_center ** (1/2.2) * 255).astype(np.uint8))
     cv2.imshow("foreground left", (foreground_left ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("foreground right", (foreground_right ** (1/2.2) * 255).astype(np.uint8))
 
-    middleground_center = prepare_view(linear_float_image, depth, [0.0, 0.7, 0.0], screen_1_distance, t1, t2, rolloff_a, rolloff_b, 1)
-    middleground_left = prepare_view(linear_float_image, depth, [-0.06, 0.7, 0.0], screen_1_distance, t1, t2, rolloff_a, rolloff_b, 1)
-    middleground_right = prepare_view(linear_float_image, depth, [0.06, 0.7, 0.0], screen_1_distance, t1, t2, rolloff_a, rolloff_b, 1)
+    middleground_center = prepare_view(image, depth, [0.0, 0.7, 0.0], screen_1_distance, t1, t2, rolloff_a, rolloff_b, 11)
+    middleground_left = prepare_view(image, depth, [-0.06, 0.7, 0.0], screen_1_distance, t1, t2, rolloff_a, rolloff_b, 11)
+    middleground_right = prepare_view(image, depth, [0.06, 0.7, 0.0], screen_1_distance, t1, t2, rolloff_a, rolloff_b, 11)
     interleaved_middleground_image = lenticular_interleave(middleground_right, middleground_center, middleground_left)
     cv2.imshow("middleground center", (middleground_center ** (1/2.2) * 255).astype(np.uint8))
     cv2.imshow("middleground left", (middleground_left ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("middleground right", (middleground_right ** (1/2.2) * 255).astype(np.uint8))
 
-    background_center = prepare_view(linear_float_image, depth, [0.0, 0.7, 0.0], screen_2_distance, t2, t3, rolloff_b, 0, 1)
-    background_left = prepare_view(linear_float_image, depth, [-0.06, 0.7, 0.0], screen_2_distance, t2, t3, rolloff_b, 0, 1)
-    background_right = prepare_view(linear_float_image, depth, [0.06, 0.7, 0.0], screen_2_distance, t2, t3, rolloff_b, 0, 1)
-    interleaved_background_image = lenticular_interleave(middleground_right, middleground_center, middleground_left)
+    background_center = prepare_view(image, depth, [0.0, 0.7, 0.0], screen_2_distance, t2, t3, rolloff_b, 0, 21)
+    background_left = prepare_view(image, depth, [-0.06, 0.7, 0.0], screen_2_distance, t2, t3, rolloff_b, 0, 21)
+    background_right = prepare_view(image, depth, [0.06, 0.7, 0.0], screen_2_distance, t2, t3, rolloff_b, 0, 21)
+    interleaved_background_image = lenticular_interleave(background_right, background_center, background_left)
     cv2.imshow("background center", (background_center ** (1/2.2) * 255).astype(np.uint8))
     cv2.imshow("background left", (background_left ** (1/2.2) * 255).astype(np.uint8))
     #cv2.imshow("background right", (background_right ** (1/2.2) * 255).astype(np.uint8))
@@ -547,7 +554,7 @@ def process_all_images():
             print(f"Saved display/{image_name}.png")
 
 def main():
-    image_path = "images/jurassic.jpg"
+    image_path = "images/godzilla.jpg"
     output_image = prepare_image_3D(image_path)
     #time.sleep(10)
     #process_all_images()
