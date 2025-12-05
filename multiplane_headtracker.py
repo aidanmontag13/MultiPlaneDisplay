@@ -14,13 +14,13 @@ import queue
 import threading
 from ultralytics import YOLO
 
-H = 426
-W = 800
-VIEWER_DISTANCE = 0.7
-viewer_distance = 0.700
+H = 213
+W = 400
+PROJECTION_DISTANCE = 0.3
 SCREEN_0_DISTANCE = 0.0
 SCREEN_1_DISTANCE = 0.07239
 SCREEN_2_DISTANCE = 0.1452
+DEPTH_RANGE = 0.21718
 DISPLAY_WIDTH = 0.13596
 
 # Load model
@@ -101,18 +101,13 @@ def infer(inp):
     return depth
 
 def create_pointcloud(color, depth):
-    depth_range = 0.21718
-    projection_distance = VIEWER_DISTANCE
-    display_width = DISPLAY_WIDTH
 
-    #depth = depth - np.min(depth)
-    #depth = depth / np.max(depth)
-    depth = depth * depth_range + (projection_distance - depth_range / 6)
+    depth = depth * DEPTH_RANGE + (PROJECTION_DISTANCE - DEPTH_RANGE / 6)
 
     h, w = color.shape[:2]
     depth = cv2.resize(depth, (w, h), interpolation=cv2.INTER_LINEAR)
 
-    fx = (w / display_width) * projection_distance
+    fx = (w / DISPLAY_WIDTH) * PROJECTION_DISTANCE
     fy = fx
     cx = W / 2
     cy = H / 2
@@ -125,9 +120,11 @@ def create_pointcloud(color, depth):
     )
 
     intrinsics = o3d.camera.PinholeCameraIntrinsic(w, h, fx, fy, cx, cy)
-    pcd_og = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsics)
     pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsics)
     pcd, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
+
+    o3d.visualization.draw_geometries([pcd])
+
 
     return pcd
 
@@ -157,7 +154,7 @@ def create_mask(depth, low_thresh, high_thresh, rolloff_a, rolloff_b, blur):
         mask = ((depth >= low_thresh) & (depth <= high_thresh)).astype(np.float32)
         mask = blur_and_dilate(mask, blur)
         mask = despeckle(mask, kernel_size=3)
-        mask = cv2.resize(mask, (800, 426), interpolation=cv2.INTER_LINEAR)
+        mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_LINEAR)
         return mask
     
     lower_ramp = (depth - (low_thresh - 0.5 * rolloff_a)) / rolloff_a
@@ -176,7 +173,7 @@ def create_mask(depth, low_thresh, high_thresh, rolloff_a, rolloff_b, blur):
     mask = despeckle(mask, kernel_size=3)
     mask = blur_and_dilate(mask, blur)
 
-    mask = cv2.resize(mask, (800, 426), interpolation=cv2.INTER_LINEAR)
+    mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_LINEAR)
     
     return mask
 
@@ -187,7 +184,7 @@ def apply_mask(image, mask):
 
 def inpaint_mask(image, mask):
     mask = 1.0 - mask
-    mask = cv2.resize(mask, (800, 426), interpolation=cv2.INTER_LINEAR)
+    mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_LINEAR)
     mask_uint8 = (mask * 255).astype(np.uint8)
     kernel = np.ones((int(3), int(3)), np.uint8)
     mask = cv2.dilate(mask_uint8, kernel)
@@ -197,13 +194,13 @@ def inpaint_mask(image, mask):
 
 def render_perspective(point_cloud, viewer_position, inpaint=True):
     pcd = copy.deepcopy(point_cloud)
-    fx = (W / DISPLAY_WIDTH) * VIEWER_DISTANCE
+    fx = (W / DISPLAY_WIDTH) * PROJECTION_DISTANCE
     fy = fx
     cx = W / 2
     cy = H / 2
 
     # move point cloud to center
-    translation = np.array([0, 0, -VIEWER_DISTANCE])
+    translation = np.array([0, 0, -PROJECTION_DISTANCE])
     pcd.translate(translation, relative=True)
 
     # calculate pitch and yaw angle to keep camera centered
@@ -258,17 +255,92 @@ def render_perspective(point_cloud, viewer_position, inpaint=True):
         warped = inpaint_mask(warped, mask)
         depth_buffer = inpaint_mask(depth_buffer, mask)
     
-    return warped, depth_buffer
+    return warped, depth_buffer, viewer_distance
+
+def new_render_perspective(point_cloud, viewer_position, inpaint=True):
+    # -------------------------
+    # 1. COPY AND TRANSFORM (unchanged)
+    # -------------------------
+    pcd = copy.deepcopy(point_cloud)
+
+    fx = (W / DISPLAY_WIDTH) * PROJECTION_DISTANCE
+    fy = fx
+    cx = W / 2
+    cy = H / 2
+
+    # move point cloud to center
+    translation = np.array([0, 0, -PROJECTION_DISTANCE])
+    pcd.translate(translation, relative=True)
+
+    # your yaw/pitch system
+    yaw_angle   = np.arctan((viewer_position[0]) / viewer_position[1])
+    pitch_angle = np.arctan((viewer_position[2]) / viewer_position[1])
+
+    rotation_matrix = pcd.get_rotation_matrix_from_xyz((pitch_angle, yaw_angle, 0))
+    pcd.rotate(rotation_matrix, center=(0, 0, 0))
+
+    # your offset
+    viewer_distance = np.linalg.norm(viewer_position)
+    offset_translation = np.array([0, 0, viewer_distance])
+    pcd.translate(offset_translation, relative=True)
+
+    # -------------------------
+    # 2. SET UP RENDERER
+    # -------------------------
+    renderer = o3d.visualization.rendering.OffscreenRenderer(W, H)
+    scene = renderer.scene
+    scene.set_background([0, 0, 0, 0])
+
+    # add geometry
+    material = o3d.visualization.rendering.MaterialRecord()
+    material.shader = "defaultUnlit"
+    material.point_size = 2.0
+    scene.add_geometry("pcd", pcd, material)
+
+    # -------------------------
+    # 3. USE YOUR EXACT CAMERA INTRINSICS
+    # -------------------------
+    K = np.array([
+        [fx, 0,  cx],
+        [0,  fy, cy],
+        [0,  0,   1]
+    ], dtype=np.float64)
+
+    # extrinsic is identity, because you ALREADY moved + rotated the point cloud
+    extrinsic = np.eye(4)
+
+    renderer.setup_camera(
+        intrinsic_matrix=K,
+        extrinsic_matrix=extrinsic,
+        intrinsic_width_px=W,
+        intrinsic_height_px=H
+    )
+
+    # -------------------------
+    # 4. GPU RENDER
+    # -------------------------
+    color_o3d = renderer.render_to_image()
+    depth_o3d = renderer.render_to_depth_image(z_in_view_space=True)
+
+    color = (np.asarray(color_o3d).astype(np.float32) / 255.0)
+    depth = np.asarray(depth_o3d).astype(np.float32)
+
+    # -------------------------
+    # 5. OPTIONAL INPAINT
+    # -------------------------
+    if inpaint:
+        mask = (depth > 0).astype(np.uint8)
+        color = inpaint_mask(color, mask)
+        depth = inpaint_mask(depth, mask)
+
+    return color, depth
 
 def reproject_2D(color, viewer_position, plane_depth):
-    display_width = 0.13596
-    projection_distance = 0.7
-    
     h, w = color.shape[:2]
-    fx = (w / display_width) * projection_distance
+    fx = (w / DISPLAY_WIDTH) * PROJECTION_DISTANCE
     fy = fx
-    cx = w / 2
-    cy = h / 2
+    cx = W / 2
+    cy = H / 2
     
     K = np.array([
         [fx, 0, cx],
@@ -278,9 +350,9 @@ def reproject_2D(color, viewer_position, plane_depth):
     
     src_points = np.float32([
         [0, 0],           # Top-left
-        [w, 0],           # Top-right
-        [w, h],           # Bottom-right
-        [0, h]            # Bottom-left
+        [W, 0],           # Top-right
+        [W, H],           # Bottom-right
+        [0, H]            # Bottom-left
     ])
 
     pts_h = np.hstack([src_points, np.ones((src_points.shape[0], 1))])
@@ -299,7 +371,7 @@ def reproject_2D(color, viewer_position, plane_depth):
     origin = o3d.geometry.TriangleMesh.create_coordinate_frame()
 
     # Project corner points
-    offset_depth = 1 - (plane_depth / projection_distance)
+    offset_depth = 1 - (plane_depth / PROJECTION_DISTANCE)
     #print("offset depth", offset_depth)
     t1 = np.array([0, 0, -offset_depth])
     pcd.translate(t1, relative=True)
@@ -311,10 +383,8 @@ def reproject_2D(color, viewer_position, plane_depth):
     pcd.rotate(rotation_matrix, center=(0, 0, 0))
 
     # find offset
-    viewer_distance = np.linalg.norm(viewer_position) / projection_distance
-    #print("viewer distance", viewer_distance)
-    #print("viwer distance", viewer_distance)
-    offset_translation = np.array([0, 0, viewer_distance])
+    offset_distance = np.linalg.norm(viewer_position) / PROJECTION_DISTANCE
+    offset_translation = np.array([0, 0, offset_distance])
     pcd.translate(offset_translation, relative=True)
 
     #o3d.visualization.draw_geometries([pcd, pcd_og])
@@ -326,61 +396,48 @@ def reproject_2D(color, viewer_position, plane_depth):
     dst_pts = proj[:, :2] / proj[:, 2:3]     # normalize by Z
     
     # Apply 2D warp
-    H = cv2.getPerspectiveTransform(src_points, dst_pts.astype(np.float32))
-    H_inv = np.linalg.inv(H)
-    warped = cv2.warpPerspective(color, H_inv, (w, h))
+    H_mat = cv2.getPerspectiveTransform(src_points, dst_pts.astype(np.float32))
+    H_inv = np.linalg.inv(H_mat)
+    warped = cv2.warpPerspective(color, H_inv, (W, H))
     
     return warped
     
-
 def stack_images(foreground, middleground, background):
     foreground_flipped = cv2.flip(foreground, 0) #* (0.33, 0.33, 0.33)
     middleground_flipped = cv2.flip(middleground, 0) #* (0.8, 0.9, 1.0)
     background_flipped = cv2.flip(background, 0) #* (2.8, 3.15, 3.5)
-    black_row = np.zeros((2, 800, 3), dtype=foreground_flipped.dtype)
+    black_row = np.zeros((2, W, 3), dtype=foreground_flipped.dtype)
     combined = np.vstack((background_flipped, middleground_flipped, foreground_flipped, black_row))
 
     combined = cv2.rotate(combined, cv2.ROTATE_90_CLOCKWISE)
+    combined = cv2.rotate(combined, cv2.ROTATE_90_CLOCKWISE)
     combined = np.clip(combined, 0, 1)
     combined_srgb = (combined ** (1/2.2) * 255.0).astype(np.uint8)
+    combined_srgb = cv2.resize(combined_srgb, (800, 1280), interpolation=cv2.INTER_LINEAR)
     return combined_srgb
 
 def prepare_plane(image, depth, viewer_position, plane_depth, t1, t2, rolloff_a, rolloff_b, blur):
-    #linear_perspective_image = (image.astype(np.float32)) ** 2.2
-    #mask = create_mask(depth, t1, t2, rolloff_a, rolloff_b, blur)
-    #masked_image = apply_mask(linear_perspective_image, mask)
-    warped_image = reproject_2D(image, viewer_position, plane_depth)
+    linear_perspective_image = (image.astype(np.float32)) ** 2.2
+    mask = create_mask(depth, t1, t2, rolloff_a, rolloff_b, blur)
+    masked_image = apply_mask(linear_perspective_image, mask)
+    warped_image = reproject_2D(masked_image, viewer_position, plane_depth)
 
     return warped_image
 
 def initialize_render(image_path):
     image = cv2.imread(image_path)
-    image = resize_and_crop(image, (800, 426))
+    image = resize_and_crop(image, (W, H))
     inp = preprocess(image)
     depth = infer(inp)
-    depth = depth * -1 + 1
+    depth = 1 - depth
     depth = depth ** (2)
-
-    thresholds = threshold_multiotsu(depth, classes=3)
-
-    t1, t2 = thresholds
-    t1 = t1 * 0.21759 + (VIEWER_DISTANCE - SCREEN_1_DISTANCE / 2)
-    t2 = t2 * 0.21759 + (VIEWER_DISTANCE - SCREEN_1_DISTANCE / 2)
-    #t1 = screen_1_distance + viewer_distance
-    #t2 = screen_2_distance + viewer_distance
-    t3 = 100
-    #print("Thresholds:", t1, t2)
-    rolloff_a = SCREEN_1_DISTANCE / 4
-    rolloff_b = SCREEN_1_DISTANCE / 4
-    #rolloff_a = 0
-    #rolloff_b = 0
-    blur = 3
+    ot1, ot2 = threshold_multiotsu(depth, classes=3)
 
     pcd = create_pointcloud(image, depth)
 
-    return pcd
+    return pcd, ot1, ot2
 
-def renderer_worker(pcd, position_queue, stop_event, inpaint=False):
+def renderer_worker(pcd, ot1, ot2, rolloff_a, rolloff_b, position_queue, stop_event, inpaint=False):
     while not stop_event.is_set():
         print("position_queue", position_queue)
         position = position_queue.get()
@@ -389,41 +446,29 @@ def renderer_worker(pcd, position_queue, stop_event, inpaint=False):
         print("got position", x, y, z)
         
 
-        render, depth = render_perspective(pcd, [x, y, z], inpaint)
+        render, depth, viewer_distance = render_perspective(pcd, [x, y, z], inpaint)
 
-        #foreground = prepare_plane(render, depth, [x, y, z], SCREEN_0_DISTANCE, 0, t1, 0, rolloff_a, 3)
-        #middleground = prepare_plane(render, depth, [x, y, z], screen_1_distance, t1, t2, rolloff_a, rolloff_b, 11)
-        #background = prepare_plane(render, depth, [x, y, z], screen_2_distance, t2, t3, rolloff_b, 0, 21)
+        t1 = viewer_distance + DEPTH_RANGE * 0.33
+        t2 = viewer_distance + DEPTH_RANGE * 0.66
+        t1 = viewer_distance + DEPTH_RANGE * ot1
+        t2 = viewer_distance + DEPTH_RANGE * ot2
+        t3 = 100
 
-        #combined_image = stack_images(foreground, middleground, background) 
+        foreground = prepare_plane(render, depth, [x, y, z], SCREEN_0_DISTANCE, 0, t1, 0, rolloff_a, 3)
+        middleground = prepare_plane(render, depth, [x, y, z], SCREEN_1_DISTANCE, t1, t2, rolloff_a, rolloff_b, 3)
+        background = prepare_plane(render, depth, [x, y, z], SCREEN_2_DISTANCE, t2, t3, rolloff_b, 0, 3)
+
+        combined_image = stack_images(foreground, middleground, background) 
 
         #cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
         #cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-        #cv2.imshow("combined_image", combined_image)
-        cv2.imshow("rendered_perspective", (render * 255).astype(np.uint8))
+        cv2.imshow("combined_image", combined_image)
         position_queue.task_done()
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
-def process_all_images():
-    images, output_folder = find_usb_images()
-    
-    if not images:
-        print("No USB drive with images found!")
-        return
-    
-    print(f"Found {len(images)} images in folder.")
-
-    for img_path in images:
-        image_name = os.path.splitext(os.path.basename(img_path))[0]
-        if not os.path.exists(f"{output_folder}/{image_name}.png"):
-            print(f"Processing {img_path}...")
-            output_image = prepare_image(img_path)
-            cv2.imwrite(f"{output_folder}/{image_name}.png", output_image)
-            print(f"Saved display/{image_name}.png")
-
 def main():
-    image_path = "images/godzilla.jpg"
+    image_path = "images/2001.jpg"
 
     cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker()
     position_queue = queue.Queue(maxsize=1)
@@ -435,20 +480,21 @@ def main():
         daemon=False,
     )
 
-    pcd = initialize_render(image_path)
+    pcd, ot1, ot2 = initialize_render(image_path)
 
-    inpaint=False
+    rolloff_a = SCREEN_1_DISTANCE / 4
+    rolloff_b = SCREEN_1_DISTANCE / 4
 
     renderer_thread = threading.Thread(
         target=renderer_worker,
-        args=(pcd, position_queue, stop_event),
+        args=(pcd, ot1, ot2, rolloff_a, rolloff_b, position_queue, stop_event),
         daemon=False,
     )
 
     headtracker_thread.start()
     renderer_thread.start()
 
-    time.sleep(30)
+    time.sleep(15)
     stop_event.set()
     headtracker_thread.join()
     renderer_thread.join()
