@@ -123,8 +123,7 @@ def create_pointcloud(color, depth):
     pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsics)
     pcd, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
 
-    o3d.visualization.draw_geometries([pcd])
-
+    #o3d.visualization.draw_geometries([pcd])
 
     return pcd
 
@@ -403,14 +402,12 @@ def reproject_2D(color, viewer_position, plane_depth):
     return warped
     
 def stack_images(foreground, middleground, background):
-    foreground_flipped = cv2.flip(foreground, 0) #* (0.33, 0.33, 0.33)
-    middleground_flipped = cv2.flip(middleground, 0) #* (0.8, 0.9, 1.0)
-    background_flipped = cv2.flip(background, 0) #* (2.8, 3.15, 3.5)
-    black_row = np.zeros((2, W, 3), dtype=foreground_flipped.dtype)
-    combined = np.vstack((background_flipped, middleground_flipped, foreground_flipped, black_row))
+    foreground_flipped = cv2.flip(foreground, 0) * (0.33, 0.33, 0.33)
+    middleground_flipped = cv2.flip(middleground, 0) * (0.8, 0.9, 1.0)
+    background_flipped = cv2.flip(background, 0) * (2.8, 3.15, 3.5)
+    combined = np.vstack((background_flipped, middleground_flipped, foreground_flipped))
+    #combined = np.vstack((foreground, middleground, background))
 
-    combined = cv2.rotate(combined, cv2.ROTATE_90_CLOCKWISE)
-    combined = cv2.rotate(combined, cv2.ROTATE_90_CLOCKWISE)
     combined = np.clip(combined, 0, 1)
     combined_srgb = (combined ** (1/2.2) * 255.0).astype(np.uint8)
     combined_srgb = cv2.resize(combined_srgb, (800, 1280), interpolation=cv2.INTER_LINEAR)
@@ -430,7 +427,7 @@ def initialize_render(image_path):
     inp = preprocess(image)
     depth = infer(inp)
     depth = 1 - depth
-    depth = depth ** (2)
+    depth = depth ** (2.2)
     ot1, ot2 = threshold_multiotsu(depth, classes=3)
 
     pcd = create_pointcloud(image, depth)
@@ -450,8 +447,8 @@ def renderer_worker(pcd, ot1, ot2, rolloff_a, rolloff_b, position_queue, stop_ev
 
         t1 = viewer_distance + DEPTH_RANGE * 0.33
         t2 = viewer_distance + DEPTH_RANGE * 0.66
-        t1 = viewer_distance + DEPTH_RANGE * ot1
-        t2 = viewer_distance + DEPTH_RANGE * ot2
+        #t1 = viewer_distance + DEPTH_RANGE * ot1
+        #t2 = viewer_distance + DEPTH_RANGE * ot2
         t3 = 100
 
         foreground = prepare_plane(render, depth, [x, y, z], SCREEN_0_DISTANCE, 0, t1, 0, rolloff_a, 3)
@@ -460,15 +457,15 @@ def renderer_worker(pcd, ot1, ot2, rolloff_a, rolloff_b, position_queue, stop_ev
 
         combined_image = stack_images(foreground, middleground, background) 
 
-        #cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
-        #cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         cv2.imshow("combined_image", combined_image)
         position_queue.task_done()
         if cv2.waitKey(1) & 0xFF == ord('q'):
             break
 
 def main():
-    image_path = "images/2001.jpg"
+    image_path = "images/lunch.jpg"
 
     cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker()
     position_queue = queue.Queue(maxsize=1)
@@ -482,8 +479,8 @@ def main():
 
     pcd, ot1, ot2 = initialize_render(image_path)
 
-    rolloff_a = SCREEN_1_DISTANCE / 4
-    rolloff_b = SCREEN_1_DISTANCE / 4
+    rolloff_a = SCREEN_1_DISTANCE * 1
+    rolloff_b = SCREEN_1_DISTANCE * 1
 
     renderer_thread = threading.Thread(
         target=renderer_worker,
