@@ -113,7 +113,7 @@ def create_pointcloud(color, depth):
     cy = H / 2
 
     color_o3d = o3d.geometry.Image((color).astype(np.uint8))
-    depth_o3d = o3d.geometry.Image((depth * 1000).astype(np.uint16))
+    depth_o3d = o3d.geometry.Image((depth * (1000)).astype(np.uint16))
 
     rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(
         color_o3d, depth_o3d, convert_rgb_to_intensity=False
@@ -123,7 +123,9 @@ def create_pointcloud(color, depth):
     pcd = o3d.geometry.PointCloud.create_from_rgbd_image(rgbd_image, intrinsics)
     pcd, ind = pcd.remove_statistical_outlier(nb_neighbors=20, std_ratio=2.0)
 
-    #o3d.visualization.draw_geometries([pcd])
+    origin = o3d.geometry.TriangleMesh.create_coordinate_frame(size=0.01)
+
+    o3d.visualization.draw_geometries([pcd, origin])
 
     return pcd
 
@@ -256,10 +258,75 @@ def render_perspective(point_cloud, viewer_position, inpaint=True):
     
     return warped, depth_buffer, viewer_distance
 
+def legacy_render_perspective(point_cloud, viewer_position, inpaint=True):
+    
+    pcd = copy.deepcopy(point_cloud)
+    fx = (W / DISPLAY_WIDTH) * PROJECTION_DISTANCE
+    fy = fx
+    cx = W / 2
+    cy = H / 2
+
+    # move point cloud to center
+    translation = np.array([0, 0, -PROJECTION_DISTANCE])
+    pcd.translate(translation, relative=True)
+
+    # calculate pitch and yaw angle to keep camera centered
+    yaw_angle = np.arctan((viewer_position[0]) / viewer_position[1])
+    pitch_angle = np.arctan((viewer_position[2]) / viewer_position[1])
+
+    # rotate object
+    rotation_matrix = pcd.get_rotation_matrix_from_xyz((pitch_angle, yaw_angle, 0))
+    pcd.rotate(rotation_matrix, center=(0, 0, 0))
+
+    # find offset
+    viewer_distance = np.linalg.norm(viewer_position)
+    offset_translation = np.array([0, 0, viewer_distance])
+    pcd.translate(offset_translation, relative=True)
+
+    vis = o3d.visualization.Visualizer()
+    vis.create_window(visible=False, width=W, height=H)
+
+    w_act = vis.get_render_option().mesh_show_back_face  # fake call just to init controller
+    ctr = vis.get_view_control()
+
+    params_now = ctr.convert_to_pinhole_camera_parameters()
+    print("Window intrinsic size actually used by Open3D:", 
+      params_now.intrinsic.width, params_now.intrinsic.height)
+
+    vis.add_geometry(pcd)
+
+    intrinsic = o3d.camera.PinholeCameraIntrinsic()
+    intrinsic.set_intrinsics(W, H, fx, fy, cx, cy)
+
+    extrinsic = np.eye(4) 
+
+    cam_params = o3d.camera.PinholeCameraParameters()
+    cam_params.intrinsic = intrinsic
+    print("intrinsic", cam_params.intrinsic)
+    cam_params.extrinsic = extrinsic
+
+    ctr = vis.get_view_control()
+    ctr.convert_from_pinhole_camera_parameters(cam_params)
+
+    vis.poll_events()
+    vis.update_renderer()
+
+    color_o3d = vis.capture_screen_float_buffer(do_render=True)
+    depth_o3d = vis.capture_depth_float_buffer(do_render=True)
+
+    vis.destroy_window()
+
+    color = np.asarray(color_o3d, dtype=np.float32)
+    depth = np.asarray(depth_o3d, dtype=np.float32)
+
+    if inpaint:
+        mask = (depth > 0).astype(np.uint8)
+        color = inpaint_mask(color, mask)
+        depth = inpaint_mask(depth, mask)
+
+    return color, depth, viewer_distance
+
 def new_render_perspective(point_cloud, viewer_position, inpaint=True):
-    # -------------------------
-    # 1. COPY AND TRANSFORM (unchanged)
-    # -------------------------
     pcd = copy.deepcopy(point_cloud)
 
     fx = (W / DISPLAY_WIDTH) * PROJECTION_DISTANCE
@@ -283,9 +350,6 @@ def new_render_perspective(point_cloud, viewer_position, inpaint=True):
     offset_translation = np.array([0, 0, viewer_distance])
     pcd.translate(offset_translation, relative=True)
 
-    # -------------------------
-    # 2. SET UP RENDERER
-    # -------------------------
     renderer = o3d.visualization.rendering.OffscreenRenderer(W, H)
     scene = renderer.scene
     scene.set_background([0, 0, 0, 0])
@@ -296,9 +360,6 @@ def new_render_perspective(point_cloud, viewer_position, inpaint=True):
     material.point_size = 2.0
     scene.add_geometry("pcd", pcd, material)
 
-    # -------------------------
-    # 3. USE YOUR EXACT CAMERA INTRINSICS
-    # -------------------------
     K = np.array([
         [fx, 0,  cx],
         [0,  fy, cy],
@@ -315,18 +376,12 @@ def new_render_perspective(point_cloud, viewer_position, inpaint=True):
         intrinsic_height_px=H
     )
 
-    # -------------------------
-    # 4. GPU RENDER
-    # -------------------------
     color_o3d = renderer.render_to_image()
     depth_o3d = renderer.render_to_depth_image(z_in_view_space=True)
 
     color = (np.asarray(color_o3d).astype(np.float32) / 255.0)
     depth = np.asarray(depth_o3d).astype(np.float32)
 
-    # -------------------------
-    # 5. OPTIONAL INPAINT
-    # -------------------------
     if inpaint:
         mask = (depth > 0).astype(np.uint8)
         color = inpaint_mask(color, mask)
@@ -405,8 +460,8 @@ def stack_images(foreground, middleground, background):
     foreground_flipped = cv2.flip(foreground, 0) * (0.33, 0.33, 0.33)
     middleground_flipped = cv2.flip(middleground, 0) * (0.8, 0.9, 1.0)
     background_flipped = cv2.flip(background, 0) * (2.8, 3.15, 3.5)
-    combined = np.vstack((background_flipped, middleground_flipped, foreground_flipped))
-    #combined = np.vstack((foreground, middleground, background))
+    #combined = np.vstack((background_flipped, middleground_flipped, foreground_flipped))
+    combined = np.vstack((foreground, middleground, background))
 
     combined = np.clip(combined, 0, 1)
     combined_srgb = (combined ** (1/2.2) * 255.0).astype(np.uint8)
@@ -457,8 +512,8 @@ def renderer_worker(pcd, ot1, ot2, rolloff_a, rolloff_b, position_queue, stop_ev
 
         combined_image = stack_images(foreground, middleground, background) 
 
-        cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        #cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
+        #cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         cv2.imshow("combined_image", combined_image)
         position_queue.task_done()
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -491,7 +546,7 @@ def main():
     headtracker_thread.start()
     renderer_thread.start()
 
-    time.sleep(15)
+    time.sleep(30)
     stop_event.set()
     headtracker_thread.join()
     renderer_thread.join()

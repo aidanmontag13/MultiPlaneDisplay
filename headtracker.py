@@ -4,6 +4,7 @@ import time
 import math
 import queue
 import threading
+import os
 from ultralytics import YOLO
 
 # Set Camera FOV as a constant
@@ -113,12 +114,16 @@ def headtracker_worker(cap, model, camera_matrix, dist_coeffs, position_queue, s
                         print(x,y,z)
                         print(np.size(position_queue))
 
-                        position_queue.put((x, y, z))
+                        try:
+                            position_queue.put_nowait((x, y, z))
+                        except queue.Full:
+                            pass  # drop frame
                     
             except (IndexError, cv2.error) as e:
                 print(f"Error in pose estimation: {e}")
 
     cap.release()
+    os._exit(0)
 
 def main():
     cap, model, camera_matrix, dist_coeffs = initialize_headtracker()
