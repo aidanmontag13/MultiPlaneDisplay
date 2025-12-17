@@ -218,7 +218,7 @@ def shift_mask(mask, screen_distance, viewer_position):
     shifted_mask = cv2.warpAffine(mask, M, (W, H),
                           flags=cv2.INTER_LINEAR,
                           borderMode=cv2.BORDER_CONSTANT,
-                          borderValue=0)
+                          borderValue=1)
 
     return shifted_mask
 

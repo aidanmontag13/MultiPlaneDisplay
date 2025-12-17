@@ -114,7 +114,10 @@ def headtracker_worker(cap, model, camera_matrix, dist_coeffs, position_queue, s
                         print(x,y,z)
                         print(np.size(position_queue))
 
-                        position_queue.put_nowait((x, y, z))
+                        try:
+                            position_queue.put_nowait((x, y, z))
+                        except queue.Full:
+                            pass
                     
             except (IndexError, cv2.error) as e:
                 print(f"Error in pose estimation: {e}")
