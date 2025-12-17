@@ -111,8 +111,6 @@ def headtracker_worker(cap, model, camera_matrix, dist_coeffs, position_queue, s
                         x, z, y = translation_vector.flatten()
                         x = -x
                         z = -z
-                        print(x,y,z)
-                        print(np.size(position_queue))
 
                         try:
                             position_queue.put_nowait((x, y, z))
