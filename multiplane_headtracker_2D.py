@@ -6,7 +6,7 @@ import glob
 import os
 import time
 import copy
-import open3d as o3d
+#import open3d as o3d
 from skimage.filters import threshold_multiotsu
 
 import headtracker
@@ -14,8 +14,8 @@ import queue
 import threading
 from ultralytics import YOLO
 
-H = 213
-W = 400
+H = 426
+W = 800
 
 PROJECTION_DISTANCE = 0.3
 SCREEN_0_DISTANCE = 0.0
@@ -170,14 +170,15 @@ def inpaint_mask(image, mask):
     
 def stack_images(foreground, middleground, background):
     foreground_flipped = cv2.flip(foreground, 0) * (1.0, 1.0, 1.0)
-    middleground_flipped = cv2.flip(middleground, 0) * (0.33, 0.33, 0.33)
-    background_flipped = cv2.flip(background, 0) * (1.0, 1.0, 1.0)
-    #combined = np.vstack((background_flipped, middleground_flipped, foreground_flipped))
-    combined = np.vstack((foreground, middleground, background))
+    middleground_flipped = cv2.flip(middleground, 0) * (0.33, 0.22, 0.18)
+    background_flipped = cv2.flip(background, 0) * (1.5, 1.5, 1.5)
+    combined = np.vstack((background_flipped, middleground_flipped, foreground_flipped))
+    #combined = np.vstack((foreground, middleground, background))
 
     combined = np.clip(combined, 0, 1)
     combined_srgb = (combined ** (1/2.2) * 255.0).astype(np.uint8)
-    combined_srgb = cv2.resize(combined_srgb, (400, 640), interpolation=cv2.INTER_LINEAR)
+    combined_srgb = cv2.resize(combined_srgb, (800, 1280), interpolation=cv2.INTER_LINEAR)
+    combined_srgb = cv2.rotate(combined_srgb, cv2.ROTATE_90_CLOCKWISE)
     return combined_srgb
 
 def prepare_planes(image_path):
@@ -209,7 +210,7 @@ def prepare_planes(image_path):
 def shift_mask(mask, screen_distance, viewer_position):
     x, y, z = viewer_position
 
-    shift_x = -(x/y) * screen_distance * (W / DISPLAY_WIDTH)
+    shift_x = (x/y) * screen_distance * (W / DISPLAY_WIDTH)
     shift_y = ((z/y) * screen_distance) * (W / DISPLAY_WIDTH)
 
     M = np.float32([[1, 0, shift_x],
@@ -263,8 +264,8 @@ def renderer_worker(foreground, middleground, background, middleground_mask, bac
 
         combined_image = stack_images(foreground, masked_middleground, masked_background)
 
-        #cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
-        #cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+        cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
+        cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
         cv2.imshow("combined_image", combined_image)
         position_queue.task_done()
         if cv2.waitKey(1) & 0xFF == ord('q'):

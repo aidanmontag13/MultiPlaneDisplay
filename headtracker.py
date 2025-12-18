@@ -6,6 +6,7 @@ import queue
 import threading
 import os
 from ultralytics import YOLO
+from picamera2 import Picamera2
 
 # Set Camera FOV as a constant
 CAMERA_FOV = 69  # degrees 
@@ -23,17 +24,16 @@ def initialize_headtracker():
     # Load the YOLOv8n-pose model
     model = YOLO("yolov8n-pose.pt")
 
-    # Open webcam
-    cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+    picam2 = Picamera2()
+    config = picam2.create_preview_configuration(
+        main={"size": (640, 480), "format": "RGB888"}
+    )
+    picam2.configure(config)
+
+    picam2.start()
     time.sleep(0.5)
 
-    if not cap.isOpened():
-        print("ERROR: Camera failed to open!")
-        return None, None, None, None
-    
-    # Get image dimensions
-    frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    frame_width, frame_height = 640, 480
 
     # Calculate the camera matrix
     focal_length = frame_width / (2 * np.tan(np.deg2rad(CAMERA_FOV / 2)))
@@ -47,17 +47,18 @@ def initialize_headtracker():
     # Apply lens Distorion Correction (assuming none)
     dist_coeffs = np.zeros((4, 1), dtype=np.float32)
 
-    return cap, model, camera_matrix, dist_coeffs
+    return picam2, model, camera_matrix, dist_coeffs
 
-def headtracker_worker(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event):
+def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue, stop_event):
     while not stop_event.is_set():
-        ret, frame = cap.read()
-        if not ret:
+        frame = picam2.capture_array()
+        #frame = cv2.resize(frame, (640, 480))
+        if frame is None:
             print("ERROR: Failed to read from camera!")
             break
 
         # Get facial keypoints from yolo
-        results = model(frame, verbose=False)
+        results = model(frame, imgsz=320, conf=0.5, verbose=False)
         
         if len(results[0].keypoints.data) > 0 and results[0].keypoints.conf is not None:
             # Get the first person detected
@@ -111,29 +112,40 @@ def headtracker_worker(cap, model, camera_matrix, dist_coeffs, position_queue, s
                         x, z, y = translation_vector.flatten()
                         x = -x
                         z = -z
-                        print(x,y,z)
-                        print(np.size(position_queue))
+                        print("sending position", x,y,z)
 
                         try:
                             position_queue.put_nowait((x, y, z))
                         except queue.Full:
                             pass  # drop frame
-                    
+
             except (IndexError, cv2.error) as e:
                 print(f"Error in pose estimation: {e}")
 
-    cap.release()
+        else:
+            x = 0
+            z = 0
+            y = 0.7
+            print("sending empty", x,y,z)
+
+            try:
+                position_queue.put_nowait((x, y, z))
+            except queue.Full:
+                pass  # drop frame
+
+    picam2.stop()
+    picam2.close()
     os._exit(0)
 
 def main():
-    cap, model, camera_matrix, dist_coeffs = initialize_headtracker()
+    picam2, model, camera_matrix, dist_coeffs = initialize_headtracker()
 
     position_queue = queue.Queue(maxsize=5)
     stop_event = threading.Event()
 
     headtracker_thread = threading.Thread(
         target=headtracker_worker,
-        args=(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event),
+        args=(picam2, model, camera_matrix, dist_coeffs, position_queue, stop_event),
         daemon=False,
     )
 
