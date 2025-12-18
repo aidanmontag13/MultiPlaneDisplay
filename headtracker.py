@@ -7,7 +7,6 @@ import threading
 import os
 from ultralytics import YOLO
 from picamera2 import Picamera2
-
 # Set Camera FOV as a constant
 CAMERA_FOV = 69  # degrees 
 
@@ -26,7 +25,7 @@ def initialize_headtracker():
 
     picam2 = Picamera2()
     config = picam2.create_preview_configuration(
-        main={"size": (640, 480), "format": "RGB888"}
+        main={"size": (1640, 1232), "format": "RGB888"}
     )
     picam2.configure(config)
 
@@ -49,22 +48,63 @@ def initialize_headtracker():
 
     return picam2, model, camera_matrix, dist_coeffs
 
+def draw_face_keypoints(frame, keypoints, confidences, conf_thresh=0.5):
+
+    # YOLOv8 pose indices
+    labels = {
+        0: ("nose", (0, 255, 255)),
+        1: ("left_eye", (255, 0, 0)),
+        2: ("right_eye", (0, 0, 255)),
+        3: ("left_ear", (255, 255, 0)),
+        4: ("right_ear", (0, 255, 0)),
+    }
+
+    for idx, (name, color) in labels.items():
+        if confidences[idx] > conf_thresh:
+            x, y = keypoints[idx][:2].cpu().numpy().astype(int)
+            cv2.circle(frame, (x, y), 5, color, -1)
+            cv2.putText(
+                frame,
+                name,
+                (x + 5, y - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+
+    return frame
+
+
 def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue, stop_event):
     while not stop_event.is_set():
         frame = picam2.capture_array()
-        #frame = cv2.resize(frame, (640, 480))
+
+        frame = cv2.resize(frame, (640, 480))
+        frame = cv2.rotate(frame, cv2.ROTATE_180)
         if frame is None:
             print("ERROR: Failed to read from camera!")
             break
 
+        #cv2.imshow("Head Tracker", frame)
+        #cv2.waitKey(1)
+        print(frame.shape, frame.dtype)
+
         # Get facial keypoints from yolo
-        results = model(frame, imgsz=320, conf=0.5, verbose=False)
+        results = model(frame, imgsz=640, conf=0.5, verbose=False)
+        print("Detected persons:", len(results[0].keypoints.data))
         
         if len(results[0].keypoints.data) > 0 and results[0].keypoints.conf is not None:
             # Get the first person detected
             kp = results[0].keypoints.data[0]
             confidences = results[0].keypoints.conf[0].cpu().numpy()
-            
+
+            #drawn_frame = draw_face_keypoints(frame, kp, confidences)
+
+            #cv2.imshow("Head Tracker Debug", drawn_frame)
+            #cv2.waitKey(1)
+
             # Extract keypoints of interest (nose, eyes, ears)
             try:
                 # Only use points with high enough confidence 
@@ -79,6 +119,8 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
                 
                 valid_model_points = []
                 valid_image_points = []
+
+                print("nose", right_eye)
                 
                 #create array of 2D keypoints
                 if confidences[4] > confidences[3]: 
@@ -86,6 +128,8 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
 
                 else:
                     keypoints = [(nose, 0), (left_eye, 1), (right_eye, 2), (left_ear, 3)]
+
+                #print("Using keypoints:", keypoints)
                 
                 # Only keep neccesary data
                 for point, idx in keypoints:
@@ -112,26 +156,16 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
                         x, z, y = translation_vector.flatten()
                         x = -x
                         z = -z
-                        print("sending position", x,y,z)
+
+                        print(f"Head position: x={x:.3f} m, y={y:.3f} m, z={z:.3f} m")
 
                         try:
                             position_queue.put_nowait((x, y, z))
                         except queue.Full:
-                            pass  # drop frame
-
+                            pass
+                    
             except (IndexError, cv2.error) as e:
                 print(f"Error in pose estimation: {e}")
-
-        else:
-            x = 0
-            z = 0
-            y = 0.7
-            print("sending empty", x,y,z)
-
-            try:
-                position_queue.put_nowait((x, y, z))
-            except queue.Full:
-                pass  # drop frame
 
     picam2.stop()
     picam2.close()

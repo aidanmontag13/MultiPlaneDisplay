@@ -6,7 +6,7 @@ import glob
 import os
 import time
 import copy
-#import open3d as o3d
+
 from skimage.filters import threshold_multiotsu
 
 import headtracker
@@ -14,8 +14,8 @@ import queue
 import threading
 from ultralytics import YOLO
 
-H = 426
-W = 800
+H = 213
+W = 400
 
 PROJECTION_DISTANCE = 0.3
 SCREEN_0_DISTANCE = 0.0
@@ -133,10 +133,10 @@ def create_mask(depth, low_thresh, high_thresh, rolloff_a, rolloff_b, blur):
         mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_LINEAR)
         return mask
     
-    lower_ramp = (depth - (low_thresh - 0.5 * rolloff_a)) / rolloff_a
+    lower_ramp = (depth - (low_thresh - 0.5 * rolloff_a)) / (rolloff_a + 1e-6)
     lower_ramp = np.clip(lower_ramp, 0, 1)
     
-    upper_ramp = ((high_thresh + 0.5 * rolloff_b) - depth) / rolloff_b
+    upper_ramp = ((high_thresh + 0.5 * rolloff_b) - depth) / (rolloff_b + 1e-6)
     upper_ramp = np.clip(upper_ramp, 0, 1)
     
     if low_thresh == 0:
@@ -169,9 +169,9 @@ def inpaint_mask(image, mask):
     return inpainted
     
 def stack_images(foreground, middleground, background):
-    foreground_flipped = cv2.flip(foreground, 0) * (1.0, 1.0, 1.0)
-    middleground_flipped = cv2.flip(middleground, 0) * (0.33, 0.22, 0.18)
-    background_flipped = cv2.flip(background, 0) * (1.5, 1.5, 1.5)
+    foreground_flipped = cv2.flip(foreground, 0) * (0.7, 1.0, 1.3)
+    middleground_flipped = cv2.flip(middleground, 0) * (0.33, 0.33, 0.33)
+    background_flipped = cv2.flip(background, 0) * (0.7, 1.0, 1.2)
     combined = np.vstack((background_flipped, middleground_flipped, foreground_flipped))
     #combined = np.vstack((foreground, middleground, background))
 
@@ -208,10 +208,24 @@ def prepare_planes(image_path):
     return foreground, middleground, background, middleground_front_mask, background_mask
 
 def shift_mask(mask, screen_distance, viewer_position):
+    max_shift = 100
     x, y, z = viewer_position
 
-    shift_x = (x/y) * screen_distance * (W / DISPLAY_WIDTH)
+    y = y + 0.08
+    z = x - 0.04
+
+    shift_x = -(x/y) * screen_distance * (W / DISPLAY_WIDTH)
     shift_y = ((z/y) * screen_distance) * (W / DISPLAY_WIDTH)
+
+    if shift_x > max_shift:
+        shift_x = max_shift
+    if shift_x < -max_shift:
+        shift_x = -max_shift
+
+    if shift_y > max_shift:
+        shift_y = max_shift
+    if shift_y < -max_shift:
+        shift_y = -max_shift    
 
     M = np.float32([[1, 0, shift_x],
                 [0, 1, shift_y]])
@@ -219,7 +233,7 @@ def shift_mask(mask, screen_distance, viewer_position):
     shifted_mask = cv2.warpAffine(mask, M, (W, H),
                           flags=cv2.INTER_LINEAR,
                           borderMode=cv2.BORDER_CONSTANT,
-                          borderValue=1)
+                          borderValue=0)
 
     return shifted_mask
 
@@ -240,18 +254,35 @@ def magnify_image(image, screen_distance, viewer_position):
 
     return cropped
 
-def renderer_worker(foreground, middleground, background, middleground_mask, background_mask, position_queue, stop_event):
-    while not stop_event.is_set():
-        print("position_queue", position_queue)
-        try:
-            position = position_queue.get(timeout=0.1)
-            if position is None:
-                break
-        except queue.Empty:
-            continue
+def interpolate_position(position, previous_position, alpha):
+    smoothed_position = [
+            alpha * position[0] + (1 - alpha) * previous_position[0],
+            alpha * position[1] + (1 - alpha) * previous_position[1],
+            alpha * position[2] + (1 - alpha) * previous_position[2],
+        ]
 
-        x, y, z = position
-        print("got position", x, y, z)
+    return smoothed_position
+
+def renderer_worker(foreground, middleground, background, middleground_mask, background_mask, position_queue, render_queue, stop_event):
+    alpha = 0.1  # smoothing factor
+    smoothed_position = [0, 0.7, 0]
+    target_position = [0, 0.7, 0]  # always interpolate toward this
+
+    while not stop_event.is_set():
+        # Try to get a new target position
+        try:
+            new_position = position_queue.get_nowait()
+            if new_position is not None:
+                target_position = list(new_position)
+                print("got position", new_position)
+            position_queue.task_done()
+        except queue.Empty:
+            pass  # no new position, keep last target
+
+        # Interpolate toward target
+        smoothed_position = interpolate_position(target_position, smoothed_position, alpha)
+
+        x, y, z = smoothed_position
 
         shifted_middleground_mask = shift_mask(middleground_mask, SCREEN_1_DISTANCE, [x, y, z])
         shifted_background_mask = shift_mask(background_mask, SCREEN_2_DISTANCE, [x, y, z])
@@ -264,18 +295,32 @@ def renderer_worker(foreground, middleground, background, middleground_mask, bac
 
         combined_image = stack_images(foreground, masked_middleground, masked_background)
 
-        cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
-        cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-        cv2.imshow("combined_image", combined_image)
-        position_queue.task_done()
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+        try:
+            render_queue.put_nowait(combined_image)
+        except queue.Full:
+            pass
+
+def display_worker(render_queue, stop_event):
+    while not stop_event.is_set():
+        try:
+            image = render_queue.get(timeout=0.1)
+            if image is None:
+                break
+            cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
+            cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
+            cv2.imshow("combined_image", image)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+            render_queue.task_done()
+        except queue.Empty:
+            continue
 
 def main():
     image_path = "images/moonlanding2.jpg"
 
     cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker()
     position_queue = queue.Queue(maxsize=1)
+    render_queue = queue.Queue(maxsize=2)
     stop_event = threading.Event()
     
     headtracker_thread = threading.Thread(
@@ -288,18 +333,27 @@ def main():
 
     renderer_thread = threading.Thread(
         target=renderer_worker,
-        args=(foreground, middleground, background, middleground_mask, background_mask, position_queue, stop_event),
+        args=(foreground, middleground, background, middleground_mask, background_mask, position_queue, render_queue, stop_event),
+        daemon=False,
+    )
+
+    display_thread = threading.Thread(
+        target=display_worker,
+        args=(render_queue, stop_event),
         daemon=False,
     )
 
     headtracker_thread.start()
     renderer_thread.start()
+    display_thread.start()
 
     time.sleep(30)
     stop_event.set()
     position_queue.put(None)
     headtracker_thread.join()
     renderer_thread.join()
+    display_thread.join()
 
 if __name__ == "__main__":
     main()
+
