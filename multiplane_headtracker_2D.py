@@ -6,6 +6,7 @@ import glob
 import os
 import time
 import copy
+import pygame
 
 from skimage.filters import threshold_multiotsu
 
@@ -14,8 +15,8 @@ import queue
 import threading
 from ultralytics import YOLO
 
-H = 213
-W = 400
+H = 426
+W = 800
 
 PROJECTION_DISTANCE = 0.3
 SCREEN_0_DISTANCE = 0.0
@@ -24,8 +25,8 @@ SCREEN_2_DISTANCE = 0.1452
 DEPTH_RANGE = 0.21718
 DISPLAY_WIDTH = 0.13596
 
-ROLLOFF_A = 0.10
-ROLLOFF_B = 0.15
+ROLLOFF_A = 0.05
+ROLLOFF_B = 0.05
 
 # Load model
 session = ort.InferenceSession(
@@ -176,10 +177,10 @@ def stack_images(foreground, middleground, background):
     #combined = np.vstack((foreground, middleground, background))
 
     combined = np.clip(combined, 0, 1)
-    combined_srgb = (combined ** (1/2.2) * 255.0).astype(np.uint8)
-    combined_srgb = cv2.resize(combined_srgb, (800, 1280), interpolation=cv2.INTER_LINEAR)
-    combined_srgb = cv2.rotate(combined_srgb, cv2.ROTATE_90_CLOCKWISE)
-    return combined_srgb
+    #combined = combined.astype(np.float32)
+    combined = cv2.rotate(combined, cv2.ROTATE_90_CLOCKWISE)
+    combined = cv2.resize(combined, (1280, 800), interpolation=cv2.INTER_LINEAR)
+    return combined
 
 def prepare_planes(image_path):
     image = cv2.imread(image_path)
@@ -198,21 +199,22 @@ def prepare_planes(image_path):
     background = inpaint_mask(linear_float_image, binary_background_mask)
 
     foreground_mask = create_mask(depth, 0, ot1, 0.0, ROLLOFF_A, 3)
-    middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 11)
-    middleground_back_mask = create_mask(depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 11)
-    background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 21)
+    middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 21)
+    middleground_back_mask = create_mask(depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 3)
+    background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 31)
 
     foreground = apply_mask(linear_float_image, foreground_mask)
     middleground = apply_mask(middleground, middleground_back_mask)
 
-    return foreground, middleground, background, middleground_front_mask, background_mask
+    return foreground, middleground, background, linear_float_image, middleground_front_mask, background_mask
 
 def shift_mask(mask, screen_distance, viewer_position):
     max_shift = 100
     x, y, z = viewer_position
 
+    x = x + 0.02
     y = y + 0.08
-    z = x - 0.04
+    z = z - 0.06
 
     shift_x = -(x/y) * screen_distance * (W / DISPLAY_WIDTH)
     shift_y = ((z/y) * screen_distance) * (W / DISPLAY_WIDTH)
@@ -232,7 +234,7 @@ def shift_mask(mask, screen_distance, viewer_position):
 
     shifted_mask = cv2.warpAffine(mask, M, (W, H),
                           flags=cv2.INTER_LINEAR,
-                          borderMode=cv2.BORDER_CONSTANT,
+                          borderMode=cv2.BORDER_REPLICATE,
                           borderValue=0)
 
     return shifted_mask
@@ -263,12 +265,19 @@ def interpolate_position(position, previous_position, alpha):
 
     return smoothed_position
 
-def renderer_worker(foreground, middleground, background, middleground_mask, background_mask, position_queue, render_queue, stop_event):
-    alpha = 0.1  # smoothing factor
+def renderer_worker(foreground, middleground, background, merged, middleground_mask, background_mask, position_queue, render_queue, render_stop_event):
+    alpha = 0.2 
     smoothed_position = [0, 0.7, 0]
-    target_position = [0, 0.7, 0]  # always interpolate toward this
+    target_position = [0, 0.7, 0] 
 
-    while not stop_event.is_set():
+    flat_image = np.zeros((1280, 800, 3), dtype=np.float32)
+    flat_image[0:426, 0:800] = merged
+    flat_image = cv2.flip(flat_image, 0)
+    flat_image = cv2.rotate(flat_image, cv2.ROTATE_90_CLOCKWISE)
+    render_queue.put(flat_image)
+    time.sleep(3)
+
+    while not render_stop_event.is_set():
         # Try to get a new target position
         try:
             new_position = position_queue.get_nowait()
@@ -290,8 +299,8 @@ def renderer_worker(foreground, middleground, background, middleground_mask, bac
         masked_middleground = apply_mask(middleground, shifted_middleground_mask)
         masked_background = apply_mask(background, shifted_background_mask)
 
-        masked_middleground = magnify_image(masked_middleground, SCREEN_1_DISTANCE, [x, y, z])
-        masked_background = magnify_image(masked_background, SCREEN_2_DISTANCE, [x, y, z])
+        masked_middleground = magnify_image(masked_middleground, SCREEN_1_DISTANCE, [0, 0.7, 0])
+        masked_background = magnify_image(masked_background, SCREEN_2_DISTANCE, [0, 0.7, 0])
 
         combined_image = stack_images(foreground, masked_middleground, masked_background)
 
@@ -300,40 +309,64 @@ def renderer_worker(foreground, middleground, background, middleground_mask, bac
         except queue.Full:
             pass
 
+    black_image = np.zeros((800, 1280, 3), dtype=np.float32)
+    render_queue.put(black_image)
+
 def display_worker(render_queue, stop_event):
+    alpha = 0.2 
+
+    current_image = np.zeros((800, 1280, 3), dtype=np.float32)
+    target_image  = np.zeros((800, 1280, 3), dtype=np.float32)
+
+    cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(
+        "combined_image",
+        cv2.WND_PROP_FULLSCREEN,
+        cv2.WINDOW_FULLSCREEN
+    )
+
+    gamma = 1 / 2.2
+    gamma_lut = np.array(
+        [(i / 255.0) ** gamma * 255 for i in range(256)],
+        dtype=np.uint8
+    )
+
     while not stop_event.is_set():
+        start_time = time.time()
         try:
-            image = render_queue.get(timeout=0.1)
-            if image is None:
-                break
-            cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
-            cv2.setWindowProperty("combined_image", cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
-            cv2.imshow("combined_image", image)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-            render_queue.task_done()
+            while True:
+                new_image = render_queue.get_nowait()
+                if new_image is None:
+                    stop_event.set()
+                    break
+                target_image = new_image.astype(np.float32)
+                render_queue.task_done()
         except queue.Empty:
-            continue
+            pass
+        
+        current_image += alpha * (target_image - current_image)
+        display = current_image ** gamma
+        display = np.clip(display * 255, 0, 255).astype(np.uint8)
+        cv2.imshow("combined_image", display)
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+
+        print(f"Frame time: {elapsed_time:.4f}s")
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
 def main():
-    image_path = "images/moonlanding2.jpg"
+    images, output_folder = find_usb_images()
 
     cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker()
     position_queue = queue.Queue(maxsize=1)
     render_queue = queue.Queue(maxsize=2)
     stop_event = threading.Event()
+    render_stop_event = threading.Event()
     
     headtracker_thread = threading.Thread(
         target=headtracker.headtracker_worker,
         args=(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event),
-        daemon=False,
-    )
-
-    foreground, middleground, background, middleground_mask, background_mask = prepare_planes(image_path)
-
-    renderer_thread = threading.Thread(
-        target=renderer_worker,
-        args=(foreground, middleground, background, middleground_mask, background_mask, position_queue, render_queue, stop_event),
         daemon=False,
     )
 
@@ -344,14 +377,29 @@ def main():
     )
 
     headtracker_thread.start()
-    renderer_thread.start()
     display_thread.start()
 
-    time.sleep(30)
+    for image_path in images:
+
+        foreground, middleground, background, merged, middleground_mask, background_mask = prepare_planes(image_path)
+
+        renderer_thread = threading.Thread(
+            target=renderer_worker,
+            args=(foreground, middleground, background, merged, middleground_mask, background_mask, position_queue, render_queue, render_stop_event),
+            daemon=False,
+        )
+
+        renderer_thread.start()
+
+        time.sleep(30)
+    
+        render_stop_event.set()
+        renderer_thread.join()
+        render_stop_event.clear()
+
     stop_event.set()
     position_queue.put(None)
     headtracker_thread.join()
-    renderer_thread.join()
     display_thread.join()
 
 if __name__ == "__main__":

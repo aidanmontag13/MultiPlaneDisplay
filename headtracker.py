@@ -32,7 +32,7 @@ def initialize_headtracker():
     picam2.start()
     time.sleep(0.5)
 
-    frame_width, frame_height = 640, 480
+    frame_width, frame_height = 320, 240
 
     # Calculate the camera matrix
     focal_length = frame_width / (2 * np.tan(np.deg2rad(CAMERA_FOV / 2)))
@@ -81,7 +81,7 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
     while not stop_event.is_set():
         frame = picam2.capture_array()
 
-        frame = cv2.resize(frame, (640, 480))
+        frame = cv2.resize(frame, (320, 240))
         frame = cv2.rotate(frame, cv2.ROTATE_180)
         if frame is None:
             print("ERROR: Failed to read from camera!")
@@ -92,7 +92,7 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
         print(frame.shape, frame.dtype)
 
         # Get facial keypoints from yolo
-        results = model(frame, imgsz=640, conf=0.5, verbose=False)
+        results = model(frame, imgsz=320, conf=0.5, verbose=False)
         print("Detected persons:", len(results[0].keypoints.data))
         
         if len(results[0].keypoints.data) > 0 and results[0].keypoints.conf is not None:
