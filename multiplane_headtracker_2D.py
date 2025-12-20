@@ -265,7 +265,7 @@ def interpolate_position(position, previous_position, alpha):
     return smoothed_position
 
 def renderer_worker(foreground, middleground, background, merged, middleground_mask, background_mask, position_queue, render_queue, render_stop_event):
-    alpha = 0.2 
+    alpha = 0.2
     smoothed_position = [0, 0.7, 0]
     target_position = [0, 0.7, 0] 
 
@@ -273,11 +273,13 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
     flat_image[0:426, 0:800] = merged
     flat_image = cv2.flip(flat_image, 0)
     flat_image = cv2.rotate(flat_image, cv2.ROTATE_90_CLOCKWISE)
-    render_queue.put(flat_image)
+    flat_image_srgb = flat_image ** (1 / 2.2)
+    render_queue.put(flat_image_srgb)
     time.sleep(3)
 
     while not render_stop_event.is_set():
         # Try to get a new target position
+        start_time = time.time()
         try:
             new_position = position_queue.get_nowait()
             if new_position is not None:
@@ -303,17 +305,20 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
 
         combined_image = stack_images(foreground, masked_middleground, masked_background)
 
-        combined_image = combined_image ** (1/2.2)
+        combined_image_srgb = combined_image ** (1 / 2.2)
 
         try:
-            render_queue.put_nowait(combined_image)
+            render_queue.put_nowait(combined_image_srgb)
         except queue.Full:
             pass
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(f"Render time: {elapsed_time:.4f}s")
 
     black_image = np.zeros((800, 1280, 3), dtype=np.float32)
     render_queue.put(black_image)
 
-def display_worker(render_queue, stop_event):
+def display_worker(render_queue, stop_event, idle_event):
     alpha = 0.2 
 
     current_image = np.zeros((800, 1280, 3), dtype=np.float32)
@@ -326,7 +331,19 @@ def display_worker(render_queue, stop_event):
         cv2.WINDOW_FULLSCREEN
     )
 
+    gamma = 1 / 2.2
+    gamma_lut = np.array(
+        [(i / 255.0) ** gamma * 255 for i in range(256)],
+        dtype=np.uint8
+    )
+
     while not stop_event.is_set():
+
+        if idle_event.is_set():
+            print("display idle on")
+            time.sleep(3)
+            continue
+        
         start_time = time.time()
         try:
             while True:
@@ -342,34 +359,35 @@ def display_worker(render_queue, stop_event):
         current_image += alpha * (target_image - current_image)
         display = np.clip(current_image * 255, 0, 255).astype(np.uint8)
         cv2.imshow("combined_image", display)
+        
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
+
         end_time = time.time()
         elapsed_time = end_time - start_time
 
         print(f"Frame time: {elapsed_time:.4f}s")
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
 
 def main():
     images, output_folder = find_usb_images()
 
     cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker()
-
     position_queue = queue.Queue(maxsize=1)
     render_queue = queue.Queue(maxsize=2)
 
     stop_event = threading.Event()
     render_stop_event = threading.Event()
-    idle_start_event = threading.Event()
+    idle_event = threading.Event()
     
     headtracker_thread = threading.Thread(
         target=headtracker.headtracker_worker,
-        args=(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event, idle_start_event),
+        args=(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event, idle_event),
         daemon=False,
     )
 
     display_thread = threading.Thread(
         target=display_worker,
-        args=(render_queue, stop_event),
+        args=(render_queue, stop_event, idle_event),
         daemon=False,
     )
 
@@ -377,7 +395,8 @@ def main():
     display_thread.start()
 
     for image_path in images:
-        if idle_start_event.is_set():
+        if idle_event.is_set():
+            print(" renderer idle on")
             time.sleep(3)
             continue
 
@@ -397,8 +416,6 @@ def main():
         renderer_thread.join()
         render_stop_event.clear()
 
-    headtracker.stop_headtracker(cap)
-
     stop_event.set()
     position_queue.put(None)
     headtracker_thread.join()
@@ -406,4 +423,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
