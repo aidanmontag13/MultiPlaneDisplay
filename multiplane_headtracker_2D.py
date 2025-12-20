@@ -45,8 +45,7 @@ def find_usb_images():
     # Loop over all USB drives
     for drive in os.listdir(media_root):
         drive_path = os.path.join(media_root, drive)
-        images_folder = os.path.join(drive_path, "images")
-        output_folder = os.path.join(drive_path, "display")
+        images_folder = os.path.join(drive_path)
 
         if os.path.isdir(images_folder):
             print(f"Found images folder on USB: {images_folder}")
@@ -58,18 +57,20 @@ def find_usb_images():
             print(f"No images folder found on USB: {drive_path}")
             continue
 
-    return image_paths, output_folder
+    return image_paths
 
 def resize_and_crop(img):
     h, w = img.shape[:2]
 
-    if w/h < 1.33:
-        border_size = int((w - h * 1) / 2)
+    if w/h < 1:
+        border_size = int((h - w * 1) / 2)
         img = cv2.copyMakeBorder(
             img, 0, 0, border_size, border_size,
         borderType=cv2.BORDER_CONSTANT,
         value=[0, 0, 0]
     )
+
+    h, w = img.shape[:2]
     
     # Compute scale factor to cover the target
     scale = W / w
@@ -371,7 +372,7 @@ def display_worker(render_queue, stop_event, idle_event):
         print(f"Frame time: {elapsed_time:.4f}s")
 
 def main():
-    images, output_folder = find_usb_images()
+    images = find_usb_images()
 
     cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker()
     position_queue = queue.Queue(maxsize=1)
