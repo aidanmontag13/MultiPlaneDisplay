@@ -60,25 +60,32 @@ def find_usb_images():
 
     return image_paths, output_folder
 
-def resize_and_crop(img, target_size):
-    target_w, target_h = target_size
+def resize_and_crop(img):
     h, w = img.shape[:2]
+
+    if w/h < 1.33:
+        border_size = int((w - h * 1) / 2)
+        img = cv2.copyMakeBorder(
+            img, 0, 0, border_size, border_size,
+        borderType=cv2.BORDER_CONSTANT,
+        value=[0, 0, 0]
+    )
     
     # Compute scale factor to cover the target
-    scale = target_w / w
+    scale = W / w
     
     # Resize image
     new_w = int(w * scale)
     new_h = int(h * scale)
     #print(f"Resizing from ({w}, {h}) to ({new_w}, {new_h})")
-    if w / h > target_w / target_h:
-        resized = cv2.resize(img, (new_w, target_h), interpolation=cv2.INTER_LINEAR)
-        start_x = (new_w - target_w) // 2
-        cropped = resized[:, start_x:start_x + target_w]
+    if w / h > W / H:
+        resized = cv2.resize(img, (new_w, H), interpolation=cv2.INTER_LINEAR)
+        start_x = (new_w - W) // 2
+        cropped = resized[:, start_x:start_x + W]
     else:
-        resized = cv2.resize(img, (target_w, new_h), interpolation=cv2.INTER_LINEAR)
-        start_y = (new_h - target_h) // 2
-        cropped = resized[start_y:start_y + target_h, :]
+        resized = cv2.resize(img, (W, new_h), interpolation=cv2.INTER_LINEAR)
+        start_y = (new_h - H) // 2
+        cropped = resized[start_y:start_y + H, :]
     
     return cropped
 
@@ -183,7 +190,7 @@ def stack_images(foreground, middleground, background):
 
 def prepare_planes(image_path):
     image = cv2.imread(image_path)
-    image = resize_and_crop(image, (W, H))
+    image = resize_and_crop(image)
     linear_float_image = (image.astype(np.float32) / 255.0) ** 2.2
     inp = preprocess(image)
     depth = infer(inp)
@@ -198,9 +205,9 @@ def prepare_planes(image_path):
     background = inpaint_mask(linear_float_image, binary_background_mask)
 
     foreground_mask = create_mask(depth, 0, ot1, 0.0, ROLLOFF_A, 3)
-    middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 21)
+    middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 11)
     middleground_back_mask = create_mask(depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 3)
-    background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 31)
+    background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 11)
 
     foreground = apply_mask(linear_float_image, foreground_mask)
     middleground = apply_mask(middleground, middleground_back_mask)
@@ -270,11 +277,11 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
     target_position = [0, 0.7, 0] 
 
     flat_image = np.zeros((1280, 800, 3), dtype=np.float32)
-    flat_image[0:426, 0:800] = merged
+    merged_srgb = (merged * (0.7, 1.0, 1.3)) ** (1 / 2.2)
+    flat_image[0:426, 0:800] = merged_srgb
     flat_image = cv2.flip(flat_image, 0)
     flat_image = cv2.rotate(flat_image, cv2.ROTATE_90_CLOCKWISE)
-    flat_image_srgb = flat_image ** (1 / 2.2)
-    render_queue.put(flat_image_srgb)
+    render_queue.put(flat_image)
     time.sleep(3)
 
     while not render_stop_event.is_set():
@@ -319,7 +326,7 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
     render_queue.put(black_image)
 
 def display_worker(render_queue, stop_event, idle_event):
-    alpha = 0.2 
+    alpha = 0.1 
 
     current_image = np.zeros((800, 1280, 3), dtype=np.float32)
     target_image  = np.zeros((800, 1280, 3), dtype=np.float32)
@@ -329,12 +336,6 @@ def display_worker(render_queue, stop_event, idle_event):
         "combined_image",
         cv2.WND_PROP_FULLSCREEN,
         cv2.WINDOW_FULLSCREEN
-    )
-
-    gamma = 1 / 2.2
-    gamma_lut = np.array(
-        [(i / 255.0) ** gamma * 255 for i in range(256)],
-        dtype=np.uint8
     )
 
     while not stop_event.is_set():
@@ -361,6 +362,7 @@ def display_worker(render_queue, stop_event, idle_event):
         cv2.imshow("combined_image", display)
         
         if cv2.waitKey(1) & 0xFF == ord('q'):
+            stop_event.set()
             break
 
         end_time = time.time()
