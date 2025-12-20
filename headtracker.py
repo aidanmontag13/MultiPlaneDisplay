@@ -77,8 +77,16 @@ def draw_face_keypoints(frame, keypoints, confidences, conf_thresh=0.5):
     return frame
 
 
-def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue, stop_event):
+def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue, stop_event, idle_start_event):
+    idle_time = 0
+    idle = False
+
     while not stop_event.is_set():
+
+        if idle == True:
+            time.sleep(3)
+            print("Head tracker slowed due to inactivity.")
+            
         frame = picam2.capture_array()
 
         frame = cv2.resize(frame, (320, 240))
@@ -96,6 +104,7 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
         print("Detected persons:", len(results[0].keypoints.data))
         
         if len(results[0].keypoints.data) > 0 and results[0].keypoints.conf is not None:
+            idle_time = 0
             # Get the first person detected
             kp = results[0].keypoints.data[0]
             confidences = results[0].keypoints.conf[0].cpu().numpy()
@@ -166,7 +175,16 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
                     
             except (IndexError, cv2.error) as e:
                 print(f"Error in pose estimation: {e}")
+        else:
+            idle_time += 1
 
+        if idle_time > 300:
+            print("No face detected for a while, stopping head tracker.")
+            idle = True
+            idle_start_event.set()
+            break
+
+def stop_headtracker(picam2):
     picam2.stop()
     picam2.close()
     os._exit(0)

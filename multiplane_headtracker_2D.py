@@ -6,7 +6,6 @@ import glob
 import os
 import time
 import copy
-import pygame
 
 from skimage.filters import threshold_multiotsu
 
@@ -304,6 +303,8 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
 
         combined_image = stack_images(foreground, masked_middleground, masked_background)
 
+        combined_image = combined_image ** (1/2.2)
+
         try:
             render_queue.put_nowait(combined_image)
         except queue.Full:
@@ -325,12 +326,6 @@ def display_worker(render_queue, stop_event):
         cv2.WINDOW_FULLSCREEN
     )
 
-    gamma = 1 / 2.2
-    gamma_lut = np.array(
-        [(i / 255.0) ** gamma * 255 for i in range(256)],
-        dtype=np.uint8
-    )
-
     while not stop_event.is_set():
         start_time = time.time()
         try:
@@ -345,8 +340,7 @@ def display_worker(render_queue, stop_event):
             pass
         
         current_image += alpha * (target_image - current_image)
-        display = current_image ** gamma
-        display = np.clip(display * 255, 0, 255).astype(np.uint8)
+        display = np.clip(current_image * 255, 0, 255).astype(np.uint8)
         cv2.imshow("combined_image", display)
         end_time = time.time()
         elapsed_time = end_time - start_time
@@ -359,14 +353,17 @@ def main():
     images, output_folder = find_usb_images()
 
     cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker()
+
     position_queue = queue.Queue(maxsize=1)
     render_queue = queue.Queue(maxsize=2)
+
     stop_event = threading.Event()
     render_stop_event = threading.Event()
+    idle_start_event = threading.Event()
     
     headtracker_thread = threading.Thread(
         target=headtracker.headtracker_worker,
-        args=(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event),
+        args=(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event, idle_start_event),
         daemon=False,
     )
 
@@ -380,6 +377,9 @@ def main():
     display_thread.start()
 
     for image_path in images:
+        if idle_start_event.is_set():
+            time.sleep(3)
+            continue
 
         foreground, middleground, background, merged, middleground_mask, background_mask = prepare_planes(image_path)
 
@@ -396,6 +396,8 @@ def main():
         render_stop_event.set()
         renderer_thread.join()
         render_stop_event.clear()
+
+    headtracker.stop_headtracker(cap)
 
     stop_event.set()
     position_queue.put(None)
