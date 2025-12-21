@@ -217,8 +217,7 @@ def prepare_planes(image_path):
 
     return foreground, middleground, background, linear_float_image, middleground_front_mask, background_mask
 
-def shift_mask(mask, screen_distance, viewer_position):
-    max_shift = 100
+def shift_mask(mask, screen_distance, viewer_position, max_shift):
     x, y, z = viewer_position
 
     x = x + 0.02
@@ -304,8 +303,8 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
 
         x, y, z = smoothed_position
 
-        shifted_middleground_mask = shift_mask(middleground_mask, SCREEN_1_DISTANCE, [x, y, z])
-        shifted_background_mask = shift_mask(background_mask, SCREEN_2_DISTANCE, [x, y, z])
+        shifted_middleground_mask = shift_mask(middleground_mask, SCREEN_1_DISTANCE, [x, y, z], 100)
+        shifted_background_mask = shift_mask(background_mask, SCREEN_2_DISTANCE, [x, y, z], 200)
 
         masked_middleground = apply_mask(middleground, shifted_middleground_mask)
         masked_background = apply_mask(background, shifted_background_mask)
