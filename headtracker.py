@@ -87,6 +87,7 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
     idle_start_time = None
     display_on = True
     while not stop_event.is_set():
+        print("idle_time:", idle_time)
         if idle_time > 30:
             if display_on:
                 idle_event.set()
@@ -112,11 +113,12 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
         
         if len(results[0].keypoints.data) > 0 and results[0].keypoints.conf is not None:
             idle_time = 0
+            idle_start_time = None
             if not display_on:
                 idle_event.clear()
                 set_backlight(255)
                 display_on = True
-                idle_start_time = None
+                #idle_start_time = None
                 print("Turning on display")
 
             # Get the first person detected
