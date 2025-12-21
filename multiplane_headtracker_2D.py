@@ -6,6 +6,7 @@ import glob
 import os
 import time
 import copy
+import subprocess
 
 from skimage.filters import threshold_multiotsu
 
@@ -185,8 +186,9 @@ def stack_images(foreground, middleground, background):
 
     combined = np.clip(combined, 0, 1)
     #combined = combined.astype(np.float32)
-    combined = cv2.rotate(combined, cv2.ROTATE_90_CLOCKWISE)
-    combined = cv2.resize(combined, (1280, 800), interpolation=cv2.INTER_LINEAR)
+    #combined = cv2.rotate(combined, cv2.ROTATE_90_CLOCKWISE)
+    print("combined shape:", combined.shape)
+    combined = cv2.resize(combined, (800, 1280), interpolation=cv2.INTER_LINEAR)
     return combined
 
 def prepare_planes(image_path):
@@ -281,7 +283,7 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
     merged_srgb = (merged * (0.7, 1.0, 1.3)) ** (1 / 2.2)
     flat_image[0:426, 0:800] = merged_srgb
     flat_image = cv2.flip(flat_image, 0)
-    flat_image = cv2.rotate(flat_image, cv2.ROTATE_90_CLOCKWISE)
+    #flat_image = cv2.rotate(flat_image, cv2.ROTATE_90_CLOCKWISE)
     render_queue.put(flat_image)
     time.sleep(3)
 
@@ -323,14 +325,14 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
         elapsed_time = end_time - start_time
         print(f"Render time: {elapsed_time:.4f}s")
 
-    black_image = np.zeros((800, 1280, 3), dtype=np.float32)
+    black_image = np.zeros((1280, 800, 3), dtype=np.float32)
     render_queue.put(black_image)
 
 def display_worker(render_queue, stop_event, idle_event):
     alpha = 0.1 
 
-    current_image = np.zeros((800, 1280, 3), dtype=np.float32)
-    target_image  = np.zeros((800, 1280, 3), dtype=np.float32)
+    current_image = np.zeros((1280, 800, 3), dtype=np.float32)
+    target_image  = np.zeros((1280, 800, 3), dtype=np.float32)
 
     cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
     cv2.setWindowProperty(
@@ -372,6 +374,9 @@ def display_worker(render_queue, stop_event, idle_event):
         print(f"Frame time: {elapsed_time:.4f}s")
 
 def main():
+    subprocess.Popen(["unclutter", "-idle", "0", "-root"])
+
+    headtracker.set_backlight(255)
     images = find_usb_images()
 
     cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker()
