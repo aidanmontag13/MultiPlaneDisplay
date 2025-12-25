@@ -25,8 +25,8 @@ SCREEN_2_DISTANCE = 0.1452
 DEPTH_RANGE = 0.21718
 DISPLAY_WIDTH = 0.13596
 
-ROLLOFF_A = 0.05
-ROLLOFF_B = 0.05
+ROLLOFF_A = 0.1
+ROLLOFF_B = 0.15
 
 # Load model
 session = ort.InferenceSession(
@@ -178,9 +178,9 @@ def inpaint_mask(image, mask):
     return inpainted
     
 def stack_images(foreground, middleground, background):
-    foreground_flipped = cv2.flip(foreground, 0) * (0.7, 1.0, 1.3)
-    middleground_flipped = cv2.flip(middleground, 0) * (0.33, 0.33, 0.33)
-    background_flipped = cv2.flip(background, 0) * (0.7, 1.0, 1.2)
+    foreground_flipped = cv2.rotate(foreground, cv2.ROTATE_180) * (0.7, 1.0, 1.3)
+    middleground_flipped = cv2.rotate(middleground, cv2.ROTATE_180) * (0.33, 0.33, 0.33)
+    background_flipped = cv2.rotate(background, cv2.ROTATE_180) * (0.7, 1.0, 1.2)
     combined = np.vstack((background_flipped, middleground_flipped, foreground_flipped))
     #combined = np.vstack((foreground, middleground, background))
 
@@ -207,10 +207,10 @@ def prepare_planes(image_path):
     middleground = inpaint_mask(linear_float_image, binary_middleground_mask)
     background = inpaint_mask(linear_float_image, binary_background_mask)
 
-    foreground_mask = create_mask(depth, 0, ot1, 0.0, ROLLOFF_A, 3)
-    middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 11)
-    middleground_back_mask = create_mask(depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 3)
-    background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 11)
+    foreground_mask = create_mask(depth, 0, ot1, 0.0, ROLLOFF_A, 5)
+    middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 15)
+    middleground_back_mask = create_mask(depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 21)
+    background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 21)
 
     foreground = apply_mask(linear_float_image, foreground_mask)
     middleground = apply_mask(middleground, middleground_back_mask)
@@ -220,11 +220,11 @@ def prepare_planes(image_path):
 def shift_mask(mask, screen_distance, viewer_position, max_shift):
     x, y, z = viewer_position
 
-    x = x + 0.02
+    x = -x + 0.00
     y = y + 0.08
-    z = z - 0.06
+    z = z + 0.18
 
-    shift_x = -(x/y) * screen_distance * (W / DISPLAY_WIDTH)
+    shift_x = (x/y) * screen_distance * (W / DISPLAY_WIDTH)
     shift_y = ((z/y) * screen_distance) * (W / DISPLAY_WIDTH)
 
     if shift_x > max_shift:
@@ -275,13 +275,13 @@ def interpolate_position(position, previous_position, alpha):
 
 def renderer_worker(foreground, middleground, background, merged, middleground_mask, background_mask, position_queue, render_queue, render_stop_event):
     alpha = 0.2
-    smoothed_position = [0, 0.7, 0]
-    target_position = [0, 0.7, 0] 
+    smoothed_position = [0, 0.62, -0.18]
+    target_position = [0, 0.62, -0.18] 
 
     flat_image = np.zeros((1280, 800, 3), dtype=np.float32)
     merged_srgb = (merged * (0.7, 1.0, 1.3)) ** (1 / 2.2)
     flat_image[0:426, 0:800] = merged_srgb
-    flat_image = cv2.flip(flat_image, 0)
+    flat_image = cv2.rotate(flat_image, cv2.ROTATE_180)
     #flat_image = cv2.rotate(flat_image, cv2.ROTATE_90_CLOCKWISE)
     render_queue.put(flat_image)
     time.sleep(3)
@@ -304,13 +304,13 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
         x, y, z = smoothed_position
 
         shifted_middleground_mask = shift_mask(middleground_mask, SCREEN_1_DISTANCE, [x, y, z], 100)
-        shifted_background_mask = shift_mask(background_mask, SCREEN_2_DISTANCE, [x, y, z], 200)
+        shifted_background_mask = shift_mask(background_mask, (SCREEN_1_DISTANCE + 0.02), [x, y, z], 200)
 
         masked_middleground = apply_mask(middleground, shifted_middleground_mask)
         masked_background = apply_mask(background, shifted_background_mask)
 
-        masked_middleground = magnify_image(masked_middleground, SCREEN_1_DISTANCE, [0, 0.7, 0])
-        masked_background = magnify_image(masked_background, SCREEN_2_DISTANCE, [0, 0.7, 0])
+        masked_middleground = magnify_image(masked_middleground, SCREEN_1_DISTANCE, [x, y, z])
+        masked_background = magnify_image(masked_background, SCREEN_2_DISTANCE, [x, y, z])
 
         combined_image = stack_images(foreground, masked_middleground, masked_background)
 

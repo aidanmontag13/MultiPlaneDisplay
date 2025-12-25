@@ -9,7 +9,7 @@ import os
 from ultralytics import YOLO
 from picamera2 import Picamera2
 # Set Camera FOV as a constant
-CAMERA_FOV = 69  # degrees 
+CAMERA_FOV = 59  # degrees 
 
 # Define 3D model of the face (m)
 MODEL_POINTS = np.array([
@@ -112,6 +112,15 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
         print("Detected persons:", len(results[0].keypoints.data))
         
         if len(results[0].keypoints.data) > 0 and results[0].keypoints.conf is not None:
+            if len(results[0].keypoints.data) > 1:
+                print("Multiple persons detected, sending default position")
+                try:
+                    position_queue.put_nowait((0.0, 0.62, -0.18))
+                except queue.Full:
+                    pass
+                
+                continue
+
             idle_time = 0
             idle_start_time = None
             if not display_on:
