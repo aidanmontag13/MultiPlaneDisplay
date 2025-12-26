@@ -21,9 +21,12 @@ W = 800
 PROJECTION_DISTANCE = 0.3
 SCREEN_0_DISTANCE = 0.0
 SCREEN_1_DISTANCE = 0.07239
-SCREEN_2_DISTANCE = 0.1452
+SCREEN_2_DISTANCE = 0.09
 DEPTH_RANGE = 0.21718
 DISPLAY_WIDTH = 0.13596
+
+#ROLLOFF_A = 0.0
+#ROLLOFF_B = 0.0
 
 ROLLOFF_A = 0.1
 ROLLOFF_B = 0.15
@@ -124,7 +127,7 @@ def despeckle(mask, kernel_size):
 
 def blur_and_dilate(mask, blur_size):
     mask = mask * -1 + 1
-    kernel = np.ones((int(blur_size * 0.3), int(blur_size * 0.3)), np.uint8)
+    kernel = np.ones((int(blur_size * 0.1), int(blur_size * 0.1)), np.uint8)
     mask_uint8 = (mask * 255).astype(np.uint8)
     expanded = cv2.dilate(mask_uint8, kernel)
     mask = expanded.astype(np.float32) / 255.0
@@ -178,6 +181,22 @@ def inpaint_mask(image, mask):
     return inpainted
     
 def stack_images(foreground, middleground, background):
+    middleground_M = np.float32([[1, 0, 0],
+                [0, 1, 30]])
+
+    middleground = cv2.warpAffine(middleground, middleground_M, (W, H),
+                          flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT,
+                          borderValue=0)
+    
+    background_M = np.float32([[1, 0, 0],
+                [0, 1, 80]])
+
+    background = cv2.warpAffine(background, background_M, (W, H),
+                          flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT,
+                          borderValue=0)
+
     foreground_flipped = cv2.rotate(foreground, cv2.ROTATE_180) * (0.7, 1.0, 1.3)
     middleground_flipped = cv2.rotate(middleground, cv2.ROTATE_180) * (0.33, 0.33, 0.33)
     background_flipped = cv2.rotate(background, cv2.ROTATE_180) * (0.7, 1.0, 1.2)
@@ -207,25 +226,28 @@ def prepare_planes(image_path):
     middleground = inpaint_mask(linear_float_image, binary_middleground_mask)
     background = inpaint_mask(linear_float_image, binary_background_mask)
 
-    foreground_mask = create_mask(depth, 0, ot1, 0.0, ROLLOFF_A, 5)
-    middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 15)
-    middleground_back_mask = create_mask(depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 21)
-    background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 21)
+    foreground_mask = create_mask(depth, 0, ot1, 0.0, ROLLOFF_A, 1) #5)
+    middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 5) #15)
+    middleground_back_mask = create_mask(depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 21) #21)
+    background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 21) #,21)
 
     foreground = apply_mask(linear_float_image, foreground_mask)
     middleground = apply_mask(middleground, middleground_back_mask)
 
     return foreground, middleground, background, linear_float_image, middleground_front_mask, background_mask
 
-def shift_mask(mask, screen_distance, viewer_position, max_shift):
+def shift_mask(mask, screen_distance, viewer_position, max_shift, x_offset, y_offset):
     x, y, z = viewer_position
 
     x = -x + 0.00
     y = y + 0.08
-    z = z + 0.18
+    z = z + 0.06
 
     shift_x = (x/y) * screen_distance * (W / DISPLAY_WIDTH)
     shift_y = ((z/y) * screen_distance) * (W / DISPLAY_WIDTH)
+
+    shift_x = shift_x + x_offset
+    shift_y = shift_y + y_offset
 
     if shift_x > max_shift:
         shift_x = max_shift
@@ -252,7 +274,7 @@ def magnify_image(image, screen_distance, viewer_position):
 
     viewer_distance = sqrt(x**2 + y**2 + z**2)
 
-    magnification = (viewer_distance + screen_distance) / viewer_distance
+    magnification = (viewer_distance + screen_distance) / (viewer_distance)
 
     new_h = int(H * magnification)
     new_w = int(W * magnification)
@@ -265,7 +287,11 @@ def magnify_image(image, screen_distance, viewer_position):
     return cropped
 
 def interpolate_position(position, previous_position, alpha):
-    smoothed_position = [
+
+    if previous_position is None:
+        return position
+    else:
+        smoothed_position = [
             alpha * position[0] + (1 - alpha) * previous_position[0],
             alpha * position[1] + (1 - alpha) * previous_position[1],
             alpha * position[2] + (1 - alpha) * previous_position[2],
@@ -275,8 +301,8 @@ def interpolate_position(position, previous_position, alpha):
 
 def renderer_worker(foreground, middleground, background, merged, middleground_mask, background_mask, position_queue, render_queue, render_stop_event):
     alpha = 0.2
-    smoothed_position = [0, 0.62, -0.18]
-    target_position = [0, 0.62, -0.18] 
+    smoothed_position = None
+    target_position = None
 
     flat_image = np.zeros((1280, 800, 3), dtype=np.float32)
     merged_srgb = (merged * (0.7, 1.0, 1.3)) ** (1 / 2.2)
@@ -303,8 +329,8 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
 
         x, y, z = smoothed_position
 
-        shifted_middleground_mask = shift_mask(middleground_mask, SCREEN_1_DISTANCE, [x, y, z], 100)
-        shifted_background_mask = shift_mask(background_mask, (SCREEN_1_DISTANCE + 0.02), [x, y, z], 200)
+        shifted_middleground_mask = shift_mask(middleground_mask, SCREEN_1_DISTANCE, [x, y, z], 100, 10, 10)
+        shifted_background_mask = shift_mask(background_mask, (SCREEN_2_DISTANCE), [x, y, z], 200, 10, 20)
 
         masked_middleground = apply_mask(middleground, shifted_middleground_mask)
         masked_background = apply_mask(background, shifted_background_mask)
@@ -427,6 +453,7 @@ def main():
     position_queue.put(None)
     headtracker_thread.join()
     display_thread.join()
+    cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()

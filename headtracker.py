@@ -9,7 +9,7 @@ import os
 from ultralytics import YOLO
 from picamera2 import Picamera2
 # Set Camera FOV as a constant
-CAMERA_FOV = 59  # degrees 
+CAMERA_FOV = 55  # degrees 
 
 # Define 3D model of the face (m)
 MODEL_POINTS = np.array([
@@ -88,7 +88,7 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
     display_on = True
     while not stop_event.is_set():
         print("idle_time:", idle_time)
-        if idle_time > 30:
+        if idle_time > 60:
             if display_on:
                 idle_event.set()
                 print("Headtracker is idle")
