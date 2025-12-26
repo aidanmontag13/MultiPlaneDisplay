@@ -9,7 +9,7 @@ import os
 from ultralytics import YOLO
 from picamera2 import Picamera2
 # Set Camera FOV as a constant
-CAMERA_FOV = 55  # degrees 
+CAMERA_FOV = 59  # degrees 
 
 # Define 3D model of the face (m)
 MODEL_POINTS = np.array([
