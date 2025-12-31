@@ -52,4 +52,23 @@ Multi-Plane Display uses image processing and Pepper's Ghost illusions to enable
   <img src="artifacts/imag2.jpg" width="500">
 </p>
 
+## Features
+-Automatic image processing with input from USB drive
+-Compatibility with .jpg, .jpeg, .png, and .tiff
+-Automated occlusion maps with real-time headtracking
+-Automatic Display turn-off and idle mode when unobserved
+
+## Parts List
+-Waveshare 10.1" Display
+-Raspberry Pi 5
+-Cooling Fan
+-Semi-reflective acrylic (optimally use 66/33 and 50/50 teleprompter glass, but this stuff is cheap)
+-8mp camera
+-RPI 5 PSU
+-Micro SD card
+-USB Drive
+-250mm csi cable
+
+
+
 
