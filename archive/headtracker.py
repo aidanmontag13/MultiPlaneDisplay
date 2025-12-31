@@ -1,4 +1,5 @@
 import cv2
+import glob
 import numpy as np
 import time
 import math
@@ -8,7 +9,7 @@ import os
 from ultralytics import YOLO
 from picamera2 import Picamera2
 # Set Camera FOV as a constant
-CAMERA_FOV = 69  # degrees 
+CAMERA_FOV = 59  # degrees 
 
 # Define 3D model of the face (m)
 MODEL_POINTS = np.array([
@@ -76,17 +77,27 @@ def draw_face_keypoints(frame, keypoints, confidences, conf_thresh=0.5):
 
     return frame
 
+def set_backlight(value):
+    for path in glob.glob("/sys/class/backlight/*/brightness"):
+        with open(path, "w") as f:
+            f.write(str(value))
 
-def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue, stop_event, idle_start_event):
+def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue, stop_event, idle_event):
     idle_time = 0
-    idle = False
-
+    idle_start_time = None
+    display_on = True
     while not stop_event.is_set():
-
-        if idle == True:
-            time.sleep(3)
-            print("Head tracker slowed due to inactivity.")
-            
+        print("idle_time:", idle_time)
+        if idle_time > 30:
+            if display_on:
+                idle_event.set()
+                print("Headtracker is idle")
+                set_backlight(0)
+                display_on = False
+                print("Turning off display")
+            time.sleep(5)
+            print("Headtracker is in idle")
+        start_time = time.time()
         frame = picam2.capture_array()
 
         frame = cv2.resize(frame, (320, 240))
@@ -95,16 +106,30 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
             print("ERROR: Failed to read from camera!")
             break
 
-        #cv2.imshow("Head Tracker", frame)
-        #cv2.waitKey(1)
-        print(frame.shape, frame.dtype)
 
         # Get facial keypoints from yolo
         results = model(frame, imgsz=320, conf=0.5, verbose=False)
         print("Detected persons:", len(results[0].keypoints.data))
         
         if len(results[0].keypoints.data) > 0 and results[0].keypoints.conf is not None:
+            if len(results[0].keypoints.data) > 1:
+                print("Multiple persons detected, sending default position")
+                try:
+                    position_queue.put_nowait((0.0, 0.62, -0.12))
+                except queue.Full:
+                    pass
+                
+                continue
+
             idle_time = 0
+            idle_start_time = None
+            if not display_on:
+                idle_event.clear()
+                set_backlight(255)
+                display_on = True
+                #idle_start_time = None
+                print("Turning on display")
+
             # Get the first person detected
             kp = results[0].keypoints.data[0]
             confidences = results[0].keypoints.conf[0].cpu().numpy()
@@ -128,8 +153,6 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
                 
                 valid_model_points = []
                 valid_image_points = []
-
-                print("nose", right_eye)
                 
                 #create array of 2D keypoints
                 if confidences[4] > confidences[3]: 
@@ -166,7 +189,7 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
                         x = -x
                         z = -z
 
-                        print(f"Head position: x={x:.3f} m, y={y:.3f} m, z={z:.3f} m")
+                        #print(f"Head position: x={x:.3f} m, y={y:.3f} m, z={z:.3f} m")
 
                         try:
                             position_queue.put_nowait((x, y, z))
@@ -175,16 +198,23 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
                     
             except (IndexError, cv2.error) as e:
                 print(f"Error in pose estimation: {e}")
+
         else:
-            idle_time += 1
+            try:
+                position_queue.put_nowait((0, 0.62, -0.12))
+            except queue.Full:
+                pass
 
-        if idle_time > 300:
-            print("No face detected for a while, stopping head tracker.")
-            idle = True
-            idle_start_event.set()
-            break
+            if idle_start_time is None:
+                idle_start_time = time.time()
+            
+            else:    
+                idle_time = time.time() - idle_start_time
+                print(f"Idle time: {idle_time:.3f} s")
 
-def stop_headtracker(picam2):
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(f"Head processing time: {elapsed_time:.3f} s")
     picam2.stop()
     picam2.close()
     os._exit(0)
