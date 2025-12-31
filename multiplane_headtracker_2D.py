@@ -183,8 +183,9 @@ def apply_mask(image, mask):
     return masked_image
 
 def inpaint_mask(image, mask):
+    w, h = image.shape[1], image.shape[0]
     mask = 1.0 - mask
-    mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_LINEAR)
+    mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
     mask_uint8 = (mask * 255).astype(np.uint8)
     kernel = np.ones((int(3), int(3)), np.uint8)
     mask = cv2.dilate(mask_uint8, kernel)
@@ -238,9 +239,13 @@ def prepare_planes(image_path):
     middleground = inpaint_mask(linear_float_image, binary_middleground_mask)
     background = inpaint_mask(linear_float_image, binary_background_mask)
 
+    print("depth type:", depth.dtype, "min:", depth.min(), "max:", depth.max())
+    print("depth size:", depth.shape)
+    middleground_depth = inpaint_mask(depth, binary_middleground_mask)
+
     foreground_mask = create_mask(depth, 0, ot1, 0.0, ROLLOFF_A, 3) #5)
     middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 21) #15)
-    middleground_back_mask = create_mask(depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 5) #21)
+    middleground_back_mask = create_mask(middleground_depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 5) #21)
     background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 21) #,21)
 
     foreground = apply_mask(linear_float_image, foreground_mask)
@@ -347,7 +352,6 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
 
         masked_middleground = magnify_image(masked_middleground, SCREEN_1_DISTANCE, [x, y, z], DISPLAY_1_MAGNIFY_SCALER)
         masked_background = magnify_image(masked_background, SCREEN_2_DISTANCE, [x, y, z], DISPLAY_2_MAGNIFY_SCALER)
-        #masked_background = np.zeros_like(masked_background)
 
         combined_image = stack_images(foreground, masked_middleground, masked_background)
 

@@ -88,7 +88,7 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
     display_on = True
     while not stop_event.is_set():
         print("idle_time:", idle_time)
-        if idle_time > 60:
+        if idle_time > 30:
             if display_on:
                 idle_event.set()
                 print("Headtracker is idle")
@@ -115,7 +115,7 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
             if len(results[0].keypoints.data) > 1:
                 print("Multiple persons detected, sending default position")
                 try:
-                    position_queue.put_nowait((0.0, 0.62, -0.18))
+                    position_queue.put_nowait((0.0, 0.62, -0.12))
                 except queue.Full:
                     pass
                 
@@ -200,6 +200,11 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
                 print(f"Error in pose estimation: {e}")
 
         else:
+            try:
+                position_queue.put_nowait((0, 0.62, -0.12))
+            except queue.Full:
+                pass
+
             if idle_start_time is None:
                 idle_start_time = time.time()
             
