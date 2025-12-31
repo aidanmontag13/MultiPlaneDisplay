@@ -67,8 +67,8 @@ Multi-Plane Display uses image processing and Pepper's Ghost illusions to enable
 - Waveshare 10.1" Display  https://a.co/d/bgIxvvW
 - Raspberry Pi 5  https://a.co/d/f5K5WJR
 - Cooling Fan  https://a.co/d/cPdcFge
-- Semi-reflective acrylic (optimally use 66/33 and 50/50 teleprompter glass, but this stuff is cheap)  https://a.co/d/37wRoJS
-- acrylic mirror  https://a.co/d/5MYHUT7
+- Semi-reflective acrylic (162x110mm) (optimally use 66/33 and 50/50 teleprompter glass, but this stuff is cheap)  https://a.co/d/37wRoJS
+- acrylic mirror  (162x110mm) https://a.co/d/5MYHUT7 
 - 8MP camera  https://a.co/d/0b0CgG3
 - RPi 5 PSU  https://a.co/d/g17dBXe
 - Micro SD card  https://a.co/d/0lqvz4a
