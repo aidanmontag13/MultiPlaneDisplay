@@ -27,13 +27,17 @@ Multi-Plane Display uses image processing and Pepper's Ghost illusions to enable
 <table align="center">
   <tr>
     <td align="center">
+      <img src="artifacts/moonlanding2.jpg" width="400"><br>
+      <sub>Input Image</sub>
+    </td>
+    <td align="center">
       <img src="artifacts/moonlanding2.png" width="400"><br>
-      <sub>Displayed Image</sub>
+      <sub>Processed Image</sub>
     </td>
     <td width="40"></td>
     <td align="center">
       <img src="artifacts/imag3.jpg" width="425"><br>
-      <sub>Viewable Image</sub>
+      <sub>Viewable Result</sub>
     </td>
   </tr>
 </table>
