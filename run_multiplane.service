@@ -1,0 +1,31 @@
+[Unit]
+Description=Multiplane Headtracker
+After=graphical.target
+Wants=graphical.target
+
+[Service]
+Type=simple
+
+User=multiplane
+Group=multiplane
+WorkingDirectory=/home/multiplane/MultiPlaneDisplay
+
+Environment=DISPLAY=:0
+Environment=XAUTHORITY=/home/multiplane/.Xauthority
+
+# Give Python time to clean up OpenCV + camera
+TimeoutStopSec=10
+KillSignal=SIGTERM
+KillMode=control-group
+
+ExecStart=/home/multiplane/MultiPlaneDisplay/venv/bin/python \
+          /home/multiplane/MultiPlaneDisplay/multiplane_headtracker_2D.py
+
+Restart=always
+RestartSec=3
+
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=graphical.target
