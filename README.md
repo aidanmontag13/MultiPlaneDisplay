@@ -1,5 +1,4 @@
 # MultiPlaneDisplay
-This is a repository for code and schematics for multiplane display concept
 
 <p align="center">
   <img src="artifacts/imag1.jpg" width="800">
