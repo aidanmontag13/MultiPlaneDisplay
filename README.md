@@ -41,7 +41,7 @@ Multi-Plane Display uses image processing and Pepper's Ghost illusions to enable
 
 
 
-## Results
+## Gallery
 <p align="center">
   <img src="artifacts/left.jpg" width="250">
   <img src="artifacts/middle.jpg" width="250">
@@ -53,21 +53,24 @@ Multi-Plane Display uses image processing and Pepper's Ghost illusions to enable
 </p>
 
 ## Features
--Automatic image processing with input from USB drive
--Compatibility with .jpg, .jpeg, .png, and .tiff
--Automated occlusion maps with real-time headtracking
--Automatic Display turn-off and idle mode when unobserved
+- Automatic image processing with input from USB drive
+- Compatibility with .jpg, .jpeg, .png, and .tiff
+- Automated occlusion maps with real-time headtracking
+- Automatic Display turn-off and idle mode when unobserved for 30 seconds
 
 ## Parts List
--Waveshare 10.1" Display
--Raspberry Pi 5
--Cooling Fan
--Semi-reflective acrylic (optimally use 66/33 and 50/50 teleprompter glass, but this stuff is cheap)
--8mp camera
--RPI 5 PSU
--Micro SD card
--USB Drive
--250mm csi cable
+
+- Waveshare 10.1" Display  https://a.co/d/bgIxvvW
+- Raspberry Pi 5  https://a.co/d/f5K5WJR
+- Cooling Fan  https://a.co/d/cPdcFge
+- Semi-reflective acrylic (optimally use 66/33 and 50/50 teleprompter glass, but this stuff is cheap)  https://a.co/d/37wRoJS
+- acrylic mirror  https://a.co/d/5MYHUT7
+- 8MP camera  https://a.co/d/0b0CgG3
+- RPi 5 PSU  https://a.co/d/g17dBXe
+- Micro SD card  https://a.co/d/0lqvz4a
+- USB Drive  https://a.co/d/dX8yHnJ
+- 250 mm CSI cable  https://a.co/d/1fIMcX2
+
 
 
 
