@@ -228,8 +228,7 @@ def shift_mask(mask, screen_distance, viewer_position):
 
     shifted_mask = cv2.warpAffine(mask, M, (W, H),
                           flags=cv2.INTER_LINEAR,
-                          borderMode=cv2.BORDER_CONSTANT,
-                          borderValue=0)
+                          borderMode=cv2.BORDER_REPLICATE)
 
     return shifted_mask
 
@@ -260,7 +259,7 @@ def interpolate_position(position, previous_position, alpha):
     return smoothed_position
 
 def renderer_worker(foreground, middleground, background, middleground_mask, background_mask, position_queue, render_queue, stop_event):
-    alpha = 0.1  # smoothing factor
+    alpha = 0.5  # smoothing factor
     smoothed_position = [0, 0.7, 0]
     target_position = [0, 0.7, 0]  # always interpolate toward this
 
@@ -286,8 +285,8 @@ def renderer_worker(foreground, middleground, background, middleground_mask, bac
         masked_middleground = apply_mask(middleground, shifted_middleground_mask)
         masked_background = apply_mask(background, shifted_background_mask)
 
-        masked_middleground = magnify_image(masked_middleground, SCREEN_1_DISTANCE, [x, y, z])
-        masked_background = magnify_image(masked_background, SCREEN_2_DISTANCE, [x, y, z])
+        masked_middleground = magnify_image(masked_middleground, SCREEN_1_DISTANCE, [0, 0.7, 0])
+        masked_background = magnify_image(masked_background, SCREEN_2_DISTANCE, [0, 0.7, 0])
 
         combined_image = stack_images(foreground, masked_middleground, masked_background)
 
