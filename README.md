@@ -44,9 +44,9 @@ Multi-Plane Display uses image processing and Pepper's Ghost illusions to enable
 
 ## Results
 <p align="center">
-  <img src="artifacts/left.jpg" width="300">
-  <img src="artifacts/middle.jpg" width="300">
-  <img src="artifacts/right.jpg" width="300">
+  <img src="artifacts/left.jpg" width="250">
+  <img src="artifacts/middle.jpg" width="250">
+  <img src="artifacts/right.jpg" width="250">
 </p>
 
 <p align="center">
