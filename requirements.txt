@@ -3,3 +3,4 @@ opencv-python
 onnxruntime
 scikit-image
 ultralytics
+picamera2
