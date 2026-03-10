@@ -75,6 +75,114 @@ Multi-Plane Display uses image processing and Pepper's Ghost illusions to enable
 - USB Drive  https://a.co/d/dX8yHnJ
 - 250 mm CSI cable  https://a.co/d/1fIMcX2
 
+INSTALLATION
+
+1. Configure the Raspberry Pi camera and display
+
+Edit the firmware configuration file:
+
+```
+sudo nano /boot/firmware/config.txt
+```
+
+Change this line:
+
+```
+camera_auto_detect=1
+```
+
+to:
+
+```
+camera_auto_detect=0
+```
+
+Add the following lines to the bottom of the file:
+
+```
+dtoverlay=vc4-kms-v3d
+dtoverlay=vc4-kms-dsi-waveshare-panel-v2,10_1_inch_a
+dtoverlay=imx219,cam0
+```
+
+Save the file and reboot the system.
+
+---
+
+2. Install system dependencies
+
+Update the system:
+
+```
+sudo apt update
+sudo apt upgrade
+```
+
+Install required packages:
+
+```
+sudo apt install -y python3-libcamera
+sudo apt install -y libcamera-apps libcamera-dev libcamera-tools
+sudo apt install -y python3-picamera2
+sudo apt install -y unclutter
+sudo apt install -y libcap-dev
+```
+
+---
+
+3. Clone the repository
+
+```
+git clone https://github.com/aidanmontag13/MultiPlaneDisplay.git
+cd MultiPlaneDisplay
+```
+
+---
+
+4. Create the Python environment
+
+Create a virtual environment with access to system packages (required for libcamera):
+
+```
+python3 -m venv venv --system-site-packages
+```
+
+Activate the environment:
+
+```
+source venv/bin/activate
+```
+
+Install Python dependencies:
+
+```
+pip install -r requirements.txt
+```
+
+---
+
+5. Install the systemd service
+
+Move the service file:
+
+```
+sudo mv ~/MultiPlaneDisplay/run_multiplane.service /etc/systemd/system/
+```
+
+Reload systemd:
+
+```
+sudo systemctl daemon-reload
+```
+
+Start the service:
+
+```
+sudo systemctl start run_multiplane.service
+
+sudo systemctl enable run_multiplane.service
+```
+
 
 
 
