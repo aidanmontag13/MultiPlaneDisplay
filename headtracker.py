@@ -6,8 +6,15 @@ import math
 import queue
 import threading
 import os
+import argparse
 from ultralytics import YOLO
 from picamera2 import Picamera2
+from functools import partial
+
+import hailo_infer
+from hailo_infer import HailoInfer
+import hailo_platform as hpf
+
 # Set Camera FOV as a constant
 CAMERA_FOV = 59  # degrees 
 
@@ -20,9 +27,21 @@ MODEL_POINTS = np.array([
     [0.060, 0.020, -0.095],         # Left ear
 ], dtype=np.float32)
 
-def initialize_headtracker():
+def initialize_headtracker(aimode=False):
     # Load the YOLOv8n-pose model
-    model = YOLO("yolov8n-pose.pt")
+    if aimode:
+        hef_path = "yolov8m_pose.hef"
+
+        # Create inference engine
+        model = HailoInfer(
+            hef_path=hef_path,
+            batch_size=1,
+            input_type="UINT8",
+            output_type="FLOAT32",
+            priority=0
+        )
+    else:
+        model = YOLO("yolov8n-pose.pt")
 
     picam2 = Picamera2()
     config = picam2.create_preview_configuration(
@@ -32,8 +51,12 @@ def initialize_headtracker():
 
     picam2.start()
     time.sleep(0.5)
-
-    frame_width, frame_height = 320, 240
+    
+    if aimode:
+        frame_width, frame_height = 640, 640
+    
+    else:
+        frame_width, frame_height = 320, 240
 
     # Calculate the camera matrix
     focal_length = frame_width / (2 * np.tan(np.deg2rad(CAMERA_FOV / 2)))
@@ -63,6 +86,7 @@ def draw_face_keypoints(frame, keypoints, confidences, conf_thresh=0.5):
     for idx, (name, color) in labels.items():
         if confidences[idx] > conf_thresh:
             x, y = keypoints[idx][:2].cpu().numpy().astype(int)
+            print(f"Drawing keypoint: {name} at ({x}, {y}) with confidence {confidences[idx]:.2f}")
             cv2.circle(frame, (x, y), 5, color, -1)
             cv2.putText(
                 frame,
@@ -82,12 +106,12 @@ def set_backlight(value):
         with open(path, "w") as f:
             f.write(str(value))
 
-def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue, stop_event, idle_event):
+def headtracker_worker(picam2, model, aimode, camera_matrix, dist_coeffs, position_queue, stop_event, idle_event):
     idle_time = 0
     idle_start_time = None
     display_on = True
     while not stop_event.is_set():
-        print("idle_time:", idle_time)
+        #print("idle_time:", idle_time)
         if idle_time > 30:
             if display_on:
                 idle_event.set()
@@ -100,16 +124,27 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
         start_time = time.time()
         frame = picam2.capture_array()
 
-        frame = cv2.resize(frame, (320, 240))
-        frame = cv2.rotate(frame, cv2.ROTATE_180)
         if frame is None:
             print("ERROR: Failed to read from camera!")
             break
-
-
+        
+        frame = cv2.rotate(frame, cv2.ROTATE_180)
         # Get facial keypoints from yolo
-        results = model(frame, imgsz=320, conf=0.5, verbose=False)
-        print("Detected persons:", len(results[0].keypoints.data))
+        if aimode:
+            frame = cv2.resize(frame, (640, 640))
+            job = model.run([frame], partial(hailo_infer.inference_callback, infer=model))
+            job.wait(10000)
+
+            output = model.last_result
+            results = hailo_infer.decode_pose_outputs(output, score_thresh=0.5)
+            #print("results", results[0].keypoints.data)
+    
+        else:
+            frame = cv2.resize(frame, (320, 240))
+            results = model(frame, imgsz=320, conf=0.5, verbose=False)
+            #print("results", results)
+
+        #print("Detected persons:", len(results[0].keypoints.data))
         
         if len(results[0].keypoints.data) > 0 and results[0].keypoints.conf is not None:
             if len(results[0].keypoints.data) > 1:
@@ -210,24 +245,31 @@ def headtracker_worker(picam2, model, camera_matrix, dist_coeffs, position_queue
             
             else:    
                 idle_time = time.time() - idle_start_time
-                print(f"Idle time: {idle_time:.3f} s")
+                #print(f"Idle time: {idle_time:.3f} s")
 
         end_time = time.time()
         elapsed_time = end_time - start_time
-        print(f"Head processing time: {elapsed_time:.3f} s")
+        #print(f"Head processing time: {elapsed_time:.3f} s")
     picam2.stop()
     picam2.close()
     os._exit(0)
 
 def main():
-    picam2, model, camera_matrix, dist_coeffs = initialize_headtracker()
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--aimode", action="store_true")
+
+    aimode = parser.parse_args().aimode
+
+    picam2, model, camera_matrix, dist_coeffs = initialize_headtracker(aimode)
 
     position_queue = queue.Queue(maxsize=5)
     stop_event = threading.Event()
+    idle_event = threading.Event()
 
     headtracker_thread = threading.Thread(
         target=headtracker_worker,
-        args=(picam2, model, camera_matrix, dist_coeffs, position_queue, stop_event),
+        args=(picam2, model, aimode, camera_matrix, dist_coeffs, position_queue, stop_event, idle_event),
         daemon=False,
     )
 

@@ -1,0 +1,17 @@
+[2026-03-10 12:56:10.522] [16118] [HailoRT] [info] [device.cpp:53] [Device] OS Version: Linux 6.12.62+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.12.62-1+rpt1 (2025-12-18) aarch64
+[2026-03-10 12:56:10.646] [16124] [HailoRT] [info] [device.cpp:53] [Device] OS Version: Linux 6.12.62+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.12.62-1+rpt1 (2025-12-18) aarch64
+[2026-03-10 12:56:10.717] [16114] [HailoRT] [info] [vdevice.cpp:227] [create] Creating vdevice with params: device_count: 1, scheduling_algorithm: ROUND_ROBIN, multi_process_service: false
+[2026-03-10 12:56:10.737] [16114] [HailoRT] [info] [device.cpp:53] [Device] OS Version: Linux 6.12.62+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.12.62-1+rpt1 (2025-12-18) aarch64
+[2026-03-10 12:56:11.151] [16114] [HailoRT] [info] [hef.cpp:1963] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolov8m_pose
+[2026-03-10 12:56:11.151] [16114] [HailoRT] [info] [hef.cpp:1963] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolov8m_pose
+[2026-03-10 12:56:11.752] [16159] [HailoRT] [info] [hef.cpp:1963] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolov8m_pose
+[2026-03-10 12:56:11.752] [16159] [HailoRT] [info] [hef.cpp:1963] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolov8m_pose
+[2026-03-10 12:56:11.753] [16159] [HailoRT] [info] [hef.cpp:1963] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolov8m_pose
+[2026-03-10 12:56:25.245] [16210] [HailoRT] [info] [device.cpp:53] [Device] OS Version: Linux 6.12.62+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.12.62-1+rpt1 (2025-12-18) aarch64
+[2026-03-10 12:56:25.300] [16114] [HailoRT] [info] [vdevice.cpp:227] [create] Creating vdevice with params: device_count: 1, scheduling_algorithm: ROUND_ROBIN, multi_process_service: false
+[2026-03-10 12:56:25.321] [16114] [HailoRT] [info] [device.cpp:53] [Device] OS Version: Linux 6.12.62+rpt-rpi-2712 #1 SMP PREEMPT Debian 1:6.12.62-1+rpt1 (2025-12-18) aarch64
+[2026-03-10 12:56:25.434] [16114] [HailoRT] [info] [hef.cpp:1963] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolov8m_pose
+[2026-03-10 12:56:25.434] [16114] [HailoRT] [info] [hef.cpp:1963] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolov8m_pose
+[2026-03-10 12:56:25.939] [16227] [HailoRT] [info] [hef.cpp:1963] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolov8m_pose
+[2026-03-10 12:56:25.939] [16227] [HailoRT] [info] [hef.cpp:1963] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolov8m_pose
+[2026-03-10 12:56:25.940] [16227] [HailoRT] [info] [hef.cpp:1963] [get_network_group_and_network_name] No name was given. Addressing all networks of default network_group: yolov8m_pose

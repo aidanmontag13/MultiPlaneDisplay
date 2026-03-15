@@ -7,6 +7,7 @@ import os
 import time
 import copy
 import subprocess
+import argparse
 
 from skimage.filters import threshold_multiotsu
 
@@ -51,6 +52,8 @@ session = ort.InferenceSession(
 
 # Get correct input name
 input_name = session.get_inputs()[0].name
+
+segment_model = YOLO("yolov8m-seg.pt")
 
 def find_usb_images():
     user = "multiplane"
@@ -182,12 +185,57 @@ def apply_mask(image, mask):
     masked_image = image * mask
     return masked_image
 
+def create_segmentation_mask(image):
+    image = cv2.resize(image, (640, 640))
+
+    results = segment_model(image)
+    result = results[0]
+
+    if result.masks is None:
+        return None
+
+    masks = result.masks.data.cpu().numpy()
+    mask = (np.sum(masks, axis=0)).astype(np.float32)
+    mask = np.clip(mask, 0, 1).astype(np.float32)
+    mask = cv2.GaussianBlur(mask, (25, 25), 0)
+
+    return masks
+
+def apply_segmentation_mask(mask, segmentation_masks, blur):
+    if segmentation_masks is None:
+        return mask
+
+    solid_mask = mask.copy()
+
+    for segmentation_mask in segmentation_masks:
+        segmentation_mask = segmentation_mask.astype(np.float32)
+        segmentation_mask = cv2.resize(segmentation_mask, (mask.shape[1], mask.shape[0]), interpolation=cv2.INTER_LINEAR)
+
+        ratio = np.sum(segmentation_mask * mask) / (np.sum(segmentation_mask))
+        print("ratio is:", ratio)
+
+        if ratio > 0.5:
+            solid_mask = np.where((segmentation_mask >= solid_mask) & (solid_mask > 0.1), segmentation_mask, solid_mask)
+
+        else:
+            solid_mask = np.where((segmentation_mask >= solid_mask) & (solid_mask > 0.1), 0, solid_mask)
+
+        solid_mask = np.clip(solid_mask, 0, 1)
+        solid_mask = cv2.GaussianBlur(solid_mask, (blur, blur), 0)
+
+    stacked_vis = np.vstack((mask, solid_mask))
+    #cv2.imshow("stacked visualization", ((stacked_vis ** 2.2) * 255).astype(np.uint8))
+    #cv2.waitKey(0)
+    #cv2.destroyAllWindows()
+        
+    return solid_mask
+
 def inpaint_mask(image, mask):
     w, h = image.shape[1], image.shape[0]
     mask = 1.0 - mask
     mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
     mask_uint8 = (mask * 255).astype(np.uint8)
-    kernel = np.ones((int(3), int(3)), np.uint8)
+    kernel = np.ones((int(5), int(5)), np.uint8)
     mask = cv2.dilate(mask_uint8, kernel)
     inpainted = cv2.inpaint((image * 255).astype(np.uint8), mask_uint8, 5, cv2.INPAINT_NS)
     inpainted = inpainted.astype(np.float32) / 255.0
@@ -233,7 +281,11 @@ def prepare_planes(image_path):
     depth = depth ** (3.0)
     ot1, ot2 = threshold_multiotsu(depth, classes=3)
 
+    segment_masks = create_segmentation_mask(image)
+
     binary_middleground_mask = create_mask(depth, ot1 - ROLLOFF_A / 2, 1, 0.0, 0.0, 1)
+    binary_middleground_mask = apply_segmentation_mask(binary_middleground_mask, segment_masks, 1)
+
     binary_background_mask = create_mask(depth, ot2 - ROLLOFF_B / 2, 1, 0.0, 0.0, 1)
 
     middleground = inpaint_mask(linear_float_image, binary_middleground_mask)
@@ -244,9 +296,16 @@ def prepare_planes(image_path):
     middleground_depth = inpaint_mask(depth, binary_middleground_mask)
 
     foreground_mask = create_mask(depth, 0, ot1, 0.0, ROLLOFF_A, 3) #5)
+    #foreground_mask = apply_segmentation_mask(foreground_mask, segment_masks, 3)
+
     middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 21) #15)
+    #middleground_front_mask = apply_segmentation_mask(middleground_front_mask, segment_masks, 21)
+
     middleground_back_mask = create_mask(middleground_depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 5) #21)
+    #middleground_back_mask = apply_segmentation_mask(middleground_back_mask, segment_masks, 5)
+
     background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 21) #,21)
+    #background_mask = apply_segmentation_mask(background_mask, segment_masks, 21)
 
     foreground = apply_mask(linear_float_image, foreground_mask)
     middleground = apply_mask(middleground, middleground_back_mask)
@@ -317,7 +376,7 @@ def interpolate_position(position, previous_position, alpha):
     return smoothed_position
 
 def renderer_worker(foreground, middleground, background, merged, middleground_mask, background_mask, position_queue, render_queue, render_stop_event):
-    alpha = 0.2
+    alpha = 0.3
     smoothed_position = None
     target_position = None
 
@@ -369,7 +428,7 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
     render_queue.put(black_image)
 
 def display_worker(render_queue, stop_event, idle_event):
-    alpha = 0.1 
+    alpha = 0.3 
 
     current_image = np.zeros((1280, 800, 3), dtype=np.float32)
     target_image  = np.zeros((1280, 800, 3), dtype=np.float32)
@@ -411,15 +470,21 @@ def display_worker(render_queue, stop_event, idle_event):
         end_time = time.time()
         elapsed_time = end_time - start_time
 
-        print(f"Frame time: {elapsed_time:.4f}s")
+        #print(f"Frame time: {elapsed_time:.4f}s")
 
 def main():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--aimode", action="store_true")
+
+    aimode = parser.parse_args().aimode
+
     subprocess.Popen(["unclutter", "-idle", "0", "-root"])
 
     headtracker.set_backlight(255)
     images = find_usb_images()
 
-    cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker()
+    cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker(aimode=aimode)
     position_queue = queue.Queue(maxsize=1)
     render_queue = queue.Queue(maxsize=2)
 
@@ -429,7 +494,7 @@ def main():
     
     headtracker_thread = threading.Thread(
         target=headtracker.headtracker_worker,
-        args=(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event, idle_event),
+        args=(cap, model, aimode, camera_matrix, dist_coeffs, position_queue, stop_event, idle_event),
         daemon=False,
     )
 
