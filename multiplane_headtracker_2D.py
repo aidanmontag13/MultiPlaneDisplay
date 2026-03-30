@@ -296,21 +296,69 @@ def prepare_planes(image_path):
     middleground_depth = inpaint_mask(depth, binary_middleground_mask)
 
     foreground_mask = create_mask(depth, 0, ot1, 0.0, ROLLOFF_A, 3) #5)
-    #foreground_mask = apply_segmentation_mask(foreground_mask, segment_masks, 3)
+    foreground_mask = apply_segmentation_mask(foreground_mask, segment_masks, 3)
 
     middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 21) #15)
-    #middleground_front_mask = apply_segmentation_mask(middleground_front_mask, segment_masks, 21)
+    middleground_front_mask = apply_segmentation_mask(middleground_front_mask, segment_masks, 21)
 
     middleground_back_mask = create_mask(middleground_depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 5) #21)
-    #middleground_back_mask = apply_segmentation_mask(middleground_back_mask, segment_masks, 5)
+    middleground_back_mask = apply_segmentation_mask(middleground_back_mask, segment_masks, 5)
 
     background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 21) #,21)
-    #background_mask = apply_segmentation_mask(background_mask, segment_masks, 21)
+    background_mask = apply_segmentation_mask(background_mask, segment_masks, 21)
 
     foreground = apply_mask(linear_float_image, foreground_mask)
     middleground = apply_mask(middleground, middleground_back_mask)
 
     return foreground, middleground, background, linear_float_image, middleground_front_mask, background_mask
+    
+def check_if_planes_exist(base_path):
+    dir_name = os.path.dirname(base_path)
+    file_name = os.path.basename(base_path)
+    name, ext = os.path.splitext(file_name)
+
+    new_path = os.path.join(dir_name, "processed_images", name)
+
+    required_files = ["foreground.tiff", "middleground.tiff", "background.tiff", "merged.tiff", "middleground_mask.tiff", "background_mask.tiff"]
+
+    for req_file in required_files:
+        if not os.path.exists(os.path.join(new_path, req_file)):
+            return False
+
+    return True
+
+def save_planes(foreground, middleground, background, merged, middleground_front_mask, background_mask, base_path):
+    dir_name = os.path.dirname(base_path)
+    file_name = os.path.basename(base_path)
+    name, ext = os.path.splitext(file_name)
+
+    new_path = os.path.join(dir_name, "processed_images", name)
+    os.makedirs(new_path, exist_ok=True)
+
+    print("saving planes to:", new_path)
+    print("saving foreground to ", os.path.join(new_path, "foreground.tiff"))
+    cv2.imwrite(os.path.join(new_path, "foreground.tiff"), (foreground * 65535).astype(np.uint16))
+    cv2.imwrite(os.path.join(new_path, "middleground.tiff"), (middleground * 65535).astype(np.uint16))
+    cv2.imwrite(os.path.join(new_path, "background.tiff"), (background * 65535).astype(np.uint16))
+    cv2.imwrite(os.path.join(new_path, "merged.tiff"), (merged * 65535).astype(np.uint16))
+    cv2.imwrite(os.path.join(new_path, "middleground_mask.tiff"), (middleground_front_mask * 65535).astype(np.uint16))
+    cv2.imwrite(os.path.join(new_path, "background_mask.tiff"), (background_mask * 65535).astype(np.uint16))
+
+def load_planes(base_path):
+    dir_name = os.path.dirname(base_path)
+    file_name = os.path.basename(base_path)
+    name, ext = os.path.splitext(file_name)
+
+    new_path = os.path.join(dir_name, "processed_images", name)
+    
+    foreground = cv2.imread(os.path.join(new_path, "foreground.tiff"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535.0
+    middleground = cv2.imread(os.path.join(new_path, "middleground.tiff"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535.0
+    background = cv2.imread(os.path.join(new_path, "background.tiff"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535.0
+    merged = cv2.imread(os.path.join(new_path, "merged.tiff"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535.0
+    middleground_mask = cv2.imread(os.path.join(new_path, "middleground_mask.tiff"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535.0
+    background_mask = cv2.imread(os.path.join(new_path, "background_mask.tiff"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535.0
+
+    return foreground, middleground, background, merged, middleground_mask, background_mask
 
 def shift_mask(mask, screen_distance, viewer_position, max_shift, x_offset, y_offset, scaler):
     x, y, z = viewer_position
@@ -513,7 +561,17 @@ def main():
             time.sleep(3)
             continue
 
-        foreground, middleground, background, merged, middleground_mask, background_mask = prepare_planes(image_path)
+        checked_planes = check_if_planes_exist(image_path)
+
+        if not checked_planes:
+            print("preparing planes for image:", image_path)
+            foreground, middleground, background, merged, middleground_mask, background_mask = prepare_planes(image_path)
+
+            save_planes(foreground, middleground, background, merged, middleground_mask, background_mask, os.path.splitext(image_path)[0])
+
+        else:
+            print("loading planes for image:", image_path)
+            foreground, middleground, background, merged, middleground_mask, background_mask = load_planes(image_path)
 
         renderer_thread = threading.Thread(
             target=renderer_worker,
