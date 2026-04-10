@@ -26,22 +26,23 @@ SCREEN_2_DISTANCE = 0.14
 DEPTH_RANGE = 0.21718
 DISPLAY_WIDTH = 0.13596
 
-DISPLAY_1_V_OFFSET = 0
-DISPLAY_2_V_OFFSET = 5
+ALL_DISPLAY_V_OFFSET = -10
+DISPLAY_1_V_OFFSET = 10
+DISPLAY_2_V_OFFSET = 30
 
-CAMERA_V_OFFSET = 35
-CAMERA_H_OFFSET = 5
+CAMERA_V_OFFSET = 30
+CAMERA_H_OFFSET = 0
 
-CAMERA_V_OFFSET_2 = 60
-CAMERA_H_OFFSET_2 = -5
+CAMERA_V_OFFSET_2 = 50
+CAMERA_H_OFFSET_2 = 0
 
-DISPLAY_1_SHIFT_SCALER = 0.9
+DISPLAY_1_SHIFT_SCALER = 0.85
 DISPLAY_2_SHIFT_SCALER = 0.4
 
-DISPLAY_1_MAGNIFY_SCALER = 1.06
-DISPLAY_2_MAGNIFY_SCALER = 1.12
+DISPLAY_1_MAGNIFY_SCALER = 1.05
+DISPLAY_2_MAGNIFY_SCALER = 1.1
 
-ROLLOFF_A = 0.1
+ROLLOFF_A = 0.07
 ROLLOFF_B = 0.15
 
 # Load model
@@ -142,12 +143,12 @@ def despeckle(mask, kernel_size):
 
 def blur_and_dilate(mask, blur_size):
     mask = mask * -1 + 1
-    kernel = np.ones((int(blur_size * 0.2), int(blur_size * 0.2)), np.uint8)
+    kernel = np.ones((int(blur_size * 0.2), int(blur_size * 0.8)), np.uint8)
     mask_uint8 = (mask * 255).astype(np.uint8)
     expanded = cv2.dilate(mask_uint8, kernel)
     mask = expanded.astype(np.float32) / 255.0
     mask = mask * -1 + 1
-    mask = cv2.GaussianBlur(mask, (blur_size, blur_size), 0)
+    mask = cv2.GaussianBlur(mask, (blur_size * 3, blur_size), 0)
     return mask
 
 def create_mask(depth, low_thresh, high_thresh, rolloff_a, rolloff_b, blur):
@@ -197,7 +198,7 @@ def create_segmentation_mask(image):
     masks = result.masks.data.cpu().numpy()
     mask = (np.sum(masks, axis=0)).astype(np.float32)
     mask = np.clip(mask, 0, 1).astype(np.float32)
-    mask = cv2.GaussianBlur(mask, (25, 25), 0)
+    #mask = cv2.GaussianBlur(mask, (25, 25), 0)
 
     return masks
 
@@ -214,14 +215,14 @@ def apply_segmentation_mask(mask, segmentation_masks, blur):
         ratio = np.sum(segmentation_mask * mask) / (np.sum(segmentation_mask))
         print("ratio is:", ratio)
 
-        if ratio > 0.5:
+        if ratio > 0.5 and ratio < 0.9:
             solid_mask = np.where((segmentation_mask >= solid_mask) & (solid_mask > 0.1), segmentation_mask, solid_mask)
 
-        else:
+        if ratio <= 0.5:
             solid_mask = np.where((segmentation_mask >= solid_mask) & (solid_mask > 0.1), 0, solid_mask)
 
         solid_mask = np.clip(solid_mask, 0, 1)
-        solid_mask = cv2.GaussianBlur(solid_mask, (blur, blur), 0)
+        solid_mask = cv2.GaussianBlur(solid_mask, (blur * 3, blur), 0)
 
     stacked_vis = np.vstack((mask, solid_mask))
     #cv2.imshow("stacked visualization", ((stacked_vis ** 2.2) * 255).astype(np.uint8))
@@ -262,12 +263,18 @@ def stack_images(foreground, middleground, background):
     middleground = middleground * (0.33, 0.33, 0.33)
     background = background * (0.7, 1.0, 1.2)
     combined = np.vstack((foreground, middleground, background))
-    #combined = np.vstack((foreground, middleground, background))
+    combined_M = np.float32([[1, 0, 0],
+                [0, 1, ALL_DISPLAY_V_OFFSET]])
+
+    combined = cv2.warpAffine(combined, combined_M, (W, H * 3),
+                          flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT,
+                          borderValue=0)
 
     combined = np.clip(combined, 0, 1)
     #combined = combined.astype(np.float32)
     #combined = cv2.rotate(combined, cv2.ROTATE_90_CLOCKWISE)
-    print("combined shape:", combined.shape)
+    #print("combined shape:", combined.shape)
     combined = cv2.resize(combined, (800, 1280), interpolation=cv2.INTER_LINEAR)
     return combined
 
@@ -301,8 +308,8 @@ def prepare_planes(image_path):
     middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 21) #15)
     middleground_front_mask = apply_segmentation_mask(middleground_front_mask, segment_masks, 21)
 
-    middleground_back_mask = create_mask(middleground_depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 5) #21)
-    middleground_back_mask = apply_segmentation_mask(middleground_back_mask, segment_masks, 5)
+    middleground_back_mask = create_mask(middleground_depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 3) #21)
+    middleground_back_mask = apply_segmentation_mask(middleground_back_mask, segment_masks, 3)
 
     background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 21) #,21)
     background_mask = apply_segmentation_mask(background_mask, segment_masks, 21)
@@ -431,6 +438,14 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
     flat_image = np.zeros((1280, 800, 3), dtype=np.float32)
     merged_srgb = (merged * (0.7, 1.0, 1.3)) ** (1 / 2.2)
     flat_image[0:426, 0:800] = merged_srgb
+    flat_image_M = np.float32([[1, 0, 0],
+                [0, 1, ALL_DISPLAY_V_OFFSET]])
+
+    flat_image = cv2.warpAffine(flat_image, flat_image_M, flat_image.shape[1::-1],
+                          flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT,
+                          borderValue=0)
+
     render_queue.put(flat_image)
     time.sleep(3)
 
@@ -563,6 +578,8 @@ def main():
 
         checked_planes = check_if_planes_exist(image_path)
 
+        #checked_planes = False # force reprocessing for testing
+
         if not checked_planes:
             print("preparing planes for image:", image_path)
             foreground, middleground, background, merged, middleground_mask, background_mask = prepare_planes(image_path)
@@ -581,7 +598,7 @@ def main():
 
         renderer_thread.start()
 
-        time.sleep(30)
+        time.sleep(20)
     
         render_stop_event.set()
         renderer_thread.join()
