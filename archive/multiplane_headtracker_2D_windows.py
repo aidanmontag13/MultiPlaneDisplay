@@ -6,7 +6,8 @@ import glob
 import os
 import time
 import copy
-import open3d as o3d
+import subprocess
+
 from skimage.filters import threshold_multiotsu
 
 import headtracker_windows as headtracker
@@ -14,17 +15,32 @@ import queue
 import threading
 from ultralytics import YOLO
 
-H = 213
-W = 400
+H = 426
+W = 800
 
 PROJECTION_DISTANCE = 0.3
 SCREEN_0_DISTANCE = 0.0
-SCREEN_1_DISTANCE = 0.07239
-SCREEN_2_DISTANCE = 0.1452
+SCREEN_1_DISTANCE = 0.07
+SCREEN_2_DISTANCE = 0.14
 DEPTH_RANGE = 0.21718
 DISPLAY_WIDTH = 0.13596
 
-ROLLOFF_A = 0.10
+DISPLAY_1_V_OFFSET = 0
+DISPLAY_2_V_OFFSET = 5
+
+CAMERA_V_OFFSET = 35
+CAMERA_H_OFFSET = 5
+
+CAMERA_V_OFFSET_2 = 60
+CAMERA_H_OFFSET_2 = -5
+
+DISPLAY_1_SHIFT_SCALER = 0.9
+DISPLAY_2_SHIFT_SCALER = 0.4
+
+DISPLAY_1_MAGNIFY_SCALER = 1.06
+DISPLAY_2_MAGNIFY_SCALER = 1.12
+
+ROLLOFF_A = 0.1
 ROLLOFF_B = 0.15
 
 # Load model
@@ -45,8 +61,7 @@ def find_usb_images():
     # Loop over all USB drives
     for drive in os.listdir(media_root):
         drive_path = os.path.join(media_root, drive)
-        images_folder = os.path.join(drive_path, "images")
-        output_folder = os.path.join(drive_path, "display")
+        images_folder = os.path.join(drive_path)
 
         if os.path.isdir(images_folder):
             print(f"Found images folder on USB: {images_folder}")
@@ -58,27 +73,51 @@ def find_usb_images():
             print(f"No images folder found on USB: {drive_path}")
             continue
 
-    return image_paths, output_folder
+    return image_paths
 
-def resize_and_crop(img, target_size):
-    target_w, target_h = target_size
+def find_folder_images(images_folder):
+
+    image_paths = []
+
+    if os.path.isdir(images_folder):
+        print(f"Found images folder on USB: {images_folder}")
+
+        # Add all image files (jpg, png, tiff)
+        for ext in ("*.jpg", "*.jpeg", "*.png", "*.tif", "*.tiff"):
+            image_paths.extend(glob.glob(os.path.join(images_folder, ext)))
+    else:
+        print(f"No images folder found in folder: {images_folder}")
+
+    return image_paths
+
+def resize_and_crop(img):
+    h, w = img.shape[:2]
+
+    if w/h < 1:
+        border_size = int((h - w * 1) / 2)
+        img = cv2.copyMakeBorder(
+            img, 0, 0, border_size, border_size,
+        borderType=cv2.BORDER_CONSTANT,
+        value=[0, 0, 0]
+    )
+
     h, w = img.shape[:2]
     
     # Compute scale factor to cover the target
-    scale = target_w / w
+    scale = W / w
     
     # Resize image
     new_w = int(w * scale)
     new_h = int(h * scale)
     #print(f"Resizing from ({w}, {h}) to ({new_w}, {new_h})")
-    if w / h > target_w / target_h:
-        resized = cv2.resize(img, (new_w, target_h), interpolation=cv2.INTER_LINEAR)
-        start_x = (new_w - target_w) // 2
-        cropped = resized[:, start_x:start_x + target_w]
+    if w / h > W / H:
+        resized = cv2.resize(img, (new_w, H), interpolation=cv2.INTER_LINEAR)
+        start_x = (new_w - W) // 2
+        cropped = resized[:, start_x:start_x + W]
     else:
-        resized = cv2.resize(img, (target_w, new_h), interpolation=cv2.INTER_LINEAR)
-        start_y = (new_h - target_h) // 2
-        cropped = resized[start_y:start_y + target_h, :]
+        resized = cv2.resize(img, (W, new_h), interpolation=cv2.INTER_LINEAR)
+        start_y = (new_h - H) // 2
+        cropped = resized[start_y:start_y + H, :]
     
     return cropped
 
@@ -115,7 +154,7 @@ def despeckle(mask, kernel_size):
 
 def blur_and_dilate(mask, blur_size):
     mask = mask * -1 + 1
-    kernel = np.ones((int(blur_size * 0.3), int(blur_size * 0.3)), np.uint8)
+    kernel = np.ones((int(blur_size * 0.2), int(blur_size * 0.2)), np.uint8)
     mask_uint8 = (mask * 255).astype(np.uint8)
     expanded = cv2.dilate(mask_uint8, kernel)
     mask = expanded.astype(np.float32) / 255.0
@@ -159,8 +198,9 @@ def apply_mask(image, mask):
     return masked_image
 
 def inpaint_mask(image, mask):
+    w, h = image.shape[1], image.shape[0]
     mask = 1.0 - mask
-    mask = cv2.resize(mask, (W, H), interpolation=cv2.INTER_LINEAR)
+    mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
     mask_uint8 = (mask * 255).astype(np.uint8)
     kernel = np.ones((int(3), int(3)), np.uint8)
     mask = cv2.dilate(mask_uint8, kernel)
@@ -169,20 +209,38 @@ def inpaint_mask(image, mask):
     return inpainted
     
 def stack_images(foreground, middleground, background):
-    foreground_flipped = cv2.flip(foreground, 0) * (1.0, 1.0, 1.0)
-    middleground_flipped = cv2.flip(middleground, 0) * (0.33, 0.33, 0.33)
-    background_flipped = cv2.flip(background, 0) * (1.0, 1.0, 1.0)
-    #combined = np.vstack((background_flipped, middleground_flipped, foreground_flipped))
+    middleground_M = np.float32([[1, 0, 0],
+                [0, 1, DISPLAY_1_V_OFFSET]])
+
+    middleground = cv2.warpAffine(middleground, middleground_M, (W, H),
+                          flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT,
+                          borderValue=0)
+    
+    background_M = np.float32([[1, 0, 0],
+                [0, 1, DISPLAY_2_V_OFFSET]])
+
+    background = cv2.warpAffine(background, background_M, (W, H),
+                          flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT,
+                          borderValue=0)
+
+    foreground = foreground * (0.7, 1.0, 1.3)
+    middleground = middleground * (0.33, 0.33, 0.33)
+    background = background * (0.7, 1.0, 1.2)
     combined = np.vstack((foreground, middleground, background))
+    #combined = np.vstack((foreground, middleground, background))
 
     combined = np.clip(combined, 0, 1)
-    combined_srgb = (combined ** (1/2.2) * 255.0).astype(np.uint8)
-    combined_srgb = cv2.resize(combined_srgb, (400, 640), interpolation=cv2.INTER_LINEAR)
-    return combined_srgb
+    #combined = combined.astype(np.float32)
+    #combined = cv2.rotate(combined, cv2.ROTATE_90_CLOCKWISE)
+    print("combined shape:", combined.shape)
+    combined = cv2.resize(combined, (800, 1280), interpolation=cv2.INTER_LINEAR)
+    return combined
 
 def prepare_planes(image_path):
     image = cv2.imread(image_path)
-    image = resize_and_crop(image, (W, H))
+    image = resize_and_crop(image)
     linear_float_image = (image.astype(np.float32) / 255.0) ** 2.2
     inp = preprocess(image)
     depth = infer(inp)
@@ -196,22 +254,32 @@ def prepare_planes(image_path):
     middleground = inpaint_mask(linear_float_image, binary_middleground_mask)
     background = inpaint_mask(linear_float_image, binary_background_mask)
 
-    foreground_mask = create_mask(depth, 0, ot1, 0.0, ROLLOFF_A, 3)
-    middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 11)
-    middleground_back_mask = create_mask(depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 11)
-    background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 21)
+    print("depth type:", depth.dtype, "min:", depth.min(), "max:", depth.max())
+    print("depth size:", depth.shape)
+    middleground_depth = inpaint_mask(depth, binary_middleground_mask)
+
+    foreground_mask = create_mask(depth, 0, ot1, 0.0, ROLLOFF_A, 3) #5)
+    middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 21) #15)
+    middleground_back_mask = create_mask(middleground_depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 5) #21)
+    background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 21) #,21)
 
     foreground = apply_mask(linear_float_image, foreground_mask)
     middleground = apply_mask(middleground, middleground_back_mask)
 
-    return foreground, middleground, background, middleground_front_mask, background_mask
+    return foreground, middleground, background, linear_float_image, middleground_front_mask, background_mask
 
-def shift_mask(mask, screen_distance, viewer_position):
-    max_shift = 50
+def shift_mask(mask, screen_distance, viewer_position, max_shift, x_offset, y_offset, scaler):
     x, y, z = viewer_position
 
-    shift_x = -(x/y) * screen_distance * (W / DISPLAY_WIDTH)
+    x = -x + 0.00
+    y = y + 0.08
+    z = z + 0.06
+
+    shift_x = (x/y) * screen_distance * (W / DISPLAY_WIDTH)
     shift_y = ((z/y) * screen_distance) * (W / DISPLAY_WIDTH)
+
+    shift_x = np.round((shift_x + x_offset) * scaler)
+    shift_y = np.round((shift_y + y_offset) * scaler)
 
     if shift_x > max_shift:
         shift_x = max_shift
@@ -228,16 +296,17 @@ def shift_mask(mask, screen_distance, viewer_position):
 
     shifted_mask = cv2.warpAffine(mask, M, (W, H),
                           flags=cv2.INTER_LINEAR,
-                          borderMode=cv2.BORDER_REPLICATE)
+                          borderMode=cv2.BORDER_REPLICATE,
+                          borderValue=0)
 
     return shifted_mask
 
-def magnify_image(image, screen_distance, viewer_position):
+def magnify_image(image, screen_distance, viewer_position, scaler):
     x, y, z = viewer_position
 
     viewer_distance = sqrt(x**2 + y**2 + z**2)
 
-    magnification = (viewer_distance + screen_distance) / viewer_distance
+    magnification = ((viewer_distance + screen_distance) / (viewer_distance)) * scaler
 
     new_h = int(H * magnification)
     new_w = int(W * magnification)
@@ -250,7 +319,11 @@ def magnify_image(image, screen_distance, viewer_position):
     return cropped
 
 def interpolate_position(position, previous_position, alpha):
-    smoothed_position = [
+
+    if previous_position is None:
+        return position
+    else:
+        smoothed_position = [
             alpha * position[0] + (1 - alpha) * previous_position[0],
             alpha * position[1] + (1 - alpha) * previous_position[1],
             alpha * position[2] + (1 - alpha) * previous_position[2],
@@ -258,17 +331,25 @@ def interpolate_position(position, previous_position, alpha):
 
     return smoothed_position
 
-def renderer_worker(foreground, middleground, background, middleground_mask, background_mask, position_queue, render_queue, stop_event):
-    alpha = 0.5  # smoothing factor
-    smoothed_position = [0, 0.7, 0]
-    target_position = [0, 0.7, 0]  # always interpolate toward this
+def renderer_worker(foreground, middleground, background, merged, middleground_mask, background_mask, position_queue, render_queue, render_stop_event):
+    alpha = 0.2
+    smoothed_position = None
+    target_position = None
 
-    while not stop_event.is_set():
+    flat_image = np.zeros((1280, 800, 3), dtype=np.float32)
+    merged_srgb = (merged * (0.7, 1.0, 1.3)) ** (1 / 2.2)
+    flat_image[0:426, 0:800] = merged_srgb
+    render_queue.put(flat_image)
+    time.sleep(3)
+
+    while not render_stop_event.is_set():
         # Try to get a new target position
+        start_time = time.time()
         try:
             new_position = position_queue.get_nowait()
             if new_position is not None:
                 target_position = list(new_position)
+                print("got position", new_position)
             position_queue.task_done()
         except queue.Empty:
             pass  # no new position, keep last target
@@ -277,75 +358,130 @@ def renderer_worker(foreground, middleground, background, middleground_mask, bac
         smoothed_position = interpolate_position(target_position, smoothed_position, alpha)
 
         x, y, z = smoothed_position
-        #print("got position", x, y, z)
 
-        shifted_middleground_mask = shift_mask(middleground_mask, SCREEN_1_DISTANCE, [x, y, z])
-        shifted_background_mask = shift_mask(background_mask, SCREEN_2_DISTANCE, [x, y, z])
+        shifted_middleground_mask = shift_mask(middleground_mask, SCREEN_1_DISTANCE, [x, y, z], 100, CAMERA_H_OFFSET, CAMERA_V_OFFSET, DISPLAY_1_SHIFT_SCALER)
+        shifted_background_mask = shift_mask(background_mask, (SCREEN_2_DISTANCE), [x, y, z], 200, CAMERA_H_OFFSET_2, CAMERA_V_OFFSET_2, DISPLAY_2_SHIFT_SCALER)
 
         masked_middleground = apply_mask(middleground, shifted_middleground_mask)
         masked_background = apply_mask(background, shifted_background_mask)
 
-        masked_middleground = magnify_image(masked_middleground, SCREEN_1_DISTANCE, [0, 0.7, 0])
-        masked_background = magnify_image(masked_background, SCREEN_2_DISTANCE, [0, 0.7, 0])
+        masked_middleground = magnify_image(masked_middleground, SCREEN_1_DISTANCE, [x, y, z], DISPLAY_1_MAGNIFY_SCALER)
+        masked_background = magnify_image(masked_background, SCREEN_2_DISTANCE, [x, y, z], DISPLAY_2_MAGNIFY_SCALER)
 
         combined_image = stack_images(foreground, masked_middleground, masked_background)
 
+        combined_image_srgb = combined_image ** (1 / 2.2)
+
         try:
-            render_queue.put_nowait(combined_image)
+            render_queue.put_nowait(combined_image_srgb)
         except queue.Full:
             pass
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(f"Render time: {elapsed_time:.4f}s")
 
-def display_worker(render_queue, stop_event):
+    black_image = np.zeros((1280, 800, 3), dtype=np.float32)
+    render_queue.put(black_image)
+
+def display_worker(render_queue, stop_event, idle_event):
+    alpha = 0.1 
+
+    current_image = np.zeros((1280, 800, 3), dtype=np.float32)
+    target_image  = np.zeros((1280, 800, 3), dtype=np.float32)
+
+    cv2.namedWindow("combined_image", cv2.WINDOW_NORMAL)
+    cv2.setWindowProperty(
+        "combined_image",
+        cv2.WND_PROP_FULLSCREEN,
+        cv2.WINDOW_FULLSCREEN
+    )
+
     while not stop_event.is_set():
-        try:
-            image = render_queue.get(timeout=0.1)
-            if image is None:
-                break
-            cv2.imshow("Multiplane Display", image)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                break
-            render_queue.task_done()
-        except queue.Empty:
+
+        if idle_event.is_set():
+            print("display idle on")
+            time.sleep(3)
             continue
+        
+        start_time = time.time()
+        try:
+            while True:
+                new_image = render_queue.get_nowait()
+                if new_image is None:
+                    stop_event.set()
+                    break
+                target_image = new_image.astype(np.float32)
+                render_queue.task_done()
+        except queue.Empty:
+            pass
+        
+        current_image += alpha * (target_image - current_image)
+        display = np.clip(current_image * 255, 0, 255).astype(np.uint8)
+        cv2.imshow("combined_image", display)
+        
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            stop_event.set()
+            break
+
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+
+        print(f"Frame time: {elapsed_time:.4f}s")
 
 def main():
-    image_path = "images/moonlanding2.jpg"
+    image_folder = "C:\Users\aidan\Documents\MultiplaneRepo\images"
+    images = find_folder_images(image_folder)
 
     cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker()
     position_queue = queue.Queue(maxsize=1)
     render_queue = queue.Queue(maxsize=2)
+
     stop_event = threading.Event()
+    render_stop_event = threading.Event()
+    idle_event = threading.Event()
     
     headtracker_thread = threading.Thread(
         target=headtracker.headtracker_worker,
-        args=(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event),
-        daemon=False,
-    )
-
-    foreground, middleground, background, middleground_mask, background_mask = prepare_planes(image_path)
-
-    renderer_thread = threading.Thread(
-        target=renderer_worker,
-        args=(foreground, middleground, background, middleground_mask, background_mask, position_queue, render_queue, stop_event),
+        args=(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event, idle_event),
         daemon=False,
     )
 
     display_thread = threading.Thread(
         target=display_worker,
-        args=(render_queue, stop_event),
+        args=(render_queue, stop_event, idle_event),
         daemon=False,
     )
 
     headtracker_thread.start()
-    renderer_thread.start()
     display_thread.start()
 
-    time.sleep(30)
+    for image_path in images:
+        if idle_event.is_set():
+            print(" renderer idle on")
+            time.sleep(3)
+            continue
+
+        foreground, middleground, background, merged, middleground_mask, background_mask = prepare_planes(image_path)
+
+        renderer_thread = threading.Thread(
+            target=renderer_worker,
+            args=(foreground, middleground, background, merged, middleground_mask, background_mask, position_queue, render_queue, render_stop_event),
+            daemon=False,
+        )
+
+        renderer_thread.start()
+
+        time.sleep(30)
+    
+        render_stop_event.set()
+        renderer_thread.join()
+        render_stop_event.clear()
+
     stop_event.set()
     position_queue.put(None)
     headtracker_thread.join()
-    renderer_thread.join()
     display_thread.join()
+    cv2.destroyAllWindows()
 
 if __name__ == "__main__":
     main()

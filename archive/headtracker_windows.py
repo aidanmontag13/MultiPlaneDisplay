@@ -1,4 +1,5 @@
 import cv2
+import glob
 import numpy as np
 import time
 import math
@@ -34,7 +35,6 @@ def initialize_headtracker():
     # Get image dimensions
     frame_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
     frame_height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-
     # Calculate the camera matrix
     focal_length = frame_width / (2 * np.tan(np.deg2rad(CAMERA_FOV / 2)))
     center = (frame_width / 2, frame_height / 2)
@@ -49,21 +49,76 @@ def initialize_headtracker():
 
     return cap, model, camera_matrix, dist_coeffs
 
-def headtracker_worker(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event):
+def draw_face_keypoints(frame, keypoints, confidences, conf_thresh=0.5):
+
+    # YOLOv8 pose indices
+    labels = {
+        0: ("nose", (0, 255, 255)),
+        1: ("left_eye", (255, 0, 0)),
+        2: ("right_eye", (0, 0, 255)),
+        3: ("left_ear", (255, 255, 0)),
+        4: ("right_ear", (0, 255, 0)),
+    }
+
+    for idx, (name, color) in labels.items():
+        if confidences[idx] > conf_thresh:
+            x, y = keypoints[idx][:2].cpu().numpy().astype(int)
+            cv2.circle(frame, (x, y), 5, color, -1)
+            cv2.putText(
+                frame,
+                name,
+                (x + 5, y - 5),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.4,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+
+    return frame
+
+def headtracker_worker(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event, idle_event):
+    idle_time = 0
+    idle_start_time = None
+    display_on = True
     while not stop_event.is_set():
+    
+        start_time = time.time()
         ret, frame = cap.read()
-        if not ret:
+
+        frame = cv2.resize(frame, (320, 240))
+        frame = cv2.rotate(frame, cv2.ROTATE_180)
+        if frame is None:
             print("ERROR: Failed to read from camera!")
             break
 
+
         # Get facial keypoints from yolo
-        results = model(frame, verbose=False)
+        results = model(frame, imgsz=320, conf=0.5, verbose=False)
+        print("Detected persons:", len(results[0].keypoints.data))
         
         if len(results[0].keypoints.data) > 0 and results[0].keypoints.conf is not None:
+            if len(results[0].keypoints.data) > 1:
+                print("Multiple persons detected, sending default position")
+                try:
+                    position_queue.put_nowait((0.0, 0.62, -0.12))
+                except queue.Full:
+                    pass
+                
+                continue
+
+            idle_time = 0
+            idle_start_time = None
+
             # Get the first person detected
             kp = results[0].keypoints.data[0]
             confidences = results[0].keypoints.conf[0].cpu().numpy()
-            
+
+            #drawn_frame = draw_face_keypoints(frame, kp, confidences)
+
+            #cv2.imshow("Head Tracker Debug", drawn_frame)
+            #cv2.waitKey(1)
+
             # Extract keypoints of interest (nose, eyes, ears)
             try:
                 # Only use points with high enough confidence 
@@ -85,6 +140,8 @@ def headtracker_worker(cap, model, camera_matrix, dist_coeffs, position_queue, s
 
                 else:
                     keypoints = [(nose, 0), (left_eye, 1), (right_eye, 2), (left_ear, 3)]
+
+                #print("Using keypoints:", keypoints)
                 
                 # Only keep neccesary data
                 for point, idx in keypoints:
@@ -112,6 +169,8 @@ def headtracker_worker(cap, model, camera_matrix, dist_coeffs, position_queue, s
                         x = -x
                         z = -z
 
+                        #print(f"Head position: x={x:.3f} m, y={y:.3f} m, z={z:.3f} m")
+
                         try:
                             position_queue.put_nowait((x, y, z))
                         except queue.Full:
@@ -119,8 +178,23 @@ def headtracker_worker(cap, model, camera_matrix, dist_coeffs, position_queue, s
                     
             except (IndexError, cv2.error) as e:
                 print(f"Error in pose estimation: {e}")
-            time.sleep(0.25)
 
+        else:
+            try:
+                position_queue.put_nowait((0, 0.62, -0.12))
+            except queue.Full:
+                pass
+
+            if idle_start_time is None:
+                idle_start_time = time.time()
+            
+            else:    
+                idle_time = time.time() - idle_start_time
+                print(f"Idle time: {idle_time:.3f} s")
+
+        end_time = time.time()
+        elapsed_time = end_time - start_time
+        print(f"Head processing time: {elapsed_time:.3f} s")
     cap.release()
     os._exit(0)
 
