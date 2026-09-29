@@ -37,6 +37,33 @@ DISPLAY_3 = np.array([
         [DISPLAY_WIDTH / 2 - 0.001, DISPLAY_HEIGHT / 2 - 0.001, -DISPLAY_3_DISTANCE],
     ])
 
+def create_mask(depth, viewer_position, center, low_thresh, high_thresh):
+    depth[depth == 0] = 100
+
+    viewer_distance = np.linalg.norm((0, 0, center) + viewer_position)
+
+    normalized_depth = depth - viewer_distance
+    
+    if low_thresh:
+        low_mask = (np.clip(normalized_depth, None, 0) + low_thresh) / (low_thresh)
+
+    else:
+        low_mask = np.ones_like(depth)
+
+    if high_thresh:
+        high_mask = (high_thresh - np.clip(normalized_depth, 0, None)) / (high_thresh)
+
+    else:
+        high_mask = np.ones_like(depth)
+
+    mask = np.minimum(low_mask, high_mask)
+
+    mask = np.clip(mask, 0, 1).astype(np.float32)
+
+    mask = cv2.cvtColor(mask, cv2.COLOR_GRAY2BGR)
+    
+    return mask
+
 faces = np.array([
     [0, 1, 2],
     [3, 2, 1]
@@ -66,41 +93,39 @@ scene = pyrender.Scene()
 scene.add(mesh)
 #scene.add(plane_mesh)
 
+viewer_position = np.array([0, 0, 5])
+
 camera_1 = pyrender.IntrinsicsCamera(
-    fx= (z + DISPLAY_1_DISTANCE) / METERS_TO_PIXELS,
-    fy= (z + DISPLAY_1_DISTANCE) / METERS_TO_PIXELS,
-    cx= (DISPLAY_RESOLUTION_X + DISPLAY_1_DISTANCE) / 2 - x / METERS_TO_PIXELS,
-    cy= (DISPLAY_RESOLUTION_Y + DISPLAY_1_DISTANCE) / 2 - y / METERS_TO_PIXELS,
+    fx= (viewer_position[2] + DISPLAY_1_DISTANCE) / METERS_TO_PIXELS,
+    fy= (viewer_position[2] + DISPLAY_1_DISTANCE) / METERS_TO_PIXELS,
+    cx= (DISPLAY_RESOLUTION_X + DISPLAY_1_DISTANCE) / 2 - viewer_position[0] / METERS_TO_PIXELS,
+    cy= (DISPLAY_RESOLUTION_Y + DISPLAY_1_DISTANCE) / 2 - viewer_position[1] / METERS_TO_PIXELS,
     znear=0.001,
     zfar=10
 )
 
 camera_2 = pyrender.IntrinsicsCamera(
-    fx= (z + DISPLAY_2_DISTANCE) / METERS_TO_PIXELS,
-    fy= (z + DISPLAY_2_DISTANCE) / METERS_TO_PIXELS,
-    cx= (DISPLAY_RESOLUTION_X + DISPLAY_2_DISTANCE) / 2 - x / METERS_TO_PIXELS,
-    cy= (DISPLAY_RESOLUTION_Y + DISPLAY_2_DISTANCE) / 2 - y / METERS_TO_PIXELS,
+    fx= (viewer_position[2] + DISPLAY_2_DISTANCE) / METERS_TO_PIXELS,
+    fy= (viewer_position[2] + DISPLAY_2_DISTANCE) / METERS_TO_PIXELS,
+    cx= (DISPLAY_RESOLUTION_X + DISPLAY_2_DISTANCE) / 2 - viewer_position[0] / METERS_TO_PIXELS,
+    cy= (DISPLAY_RESOLUTION_Y + DISPLAY_2_DISTANCE) / 2 - viewer_position[1] / METERS_TO_PIXELS,
     znear=0.001,
     zfar=10
 )
 
 camera_3 = pyrender.IntrinsicsCamera(
-    fx= (z + DISPLAY_3_DISTANCE) / METERS_TO_PIXELS,
-    fy= (z + DISPLAY_3_DISTANCE) / METERS_TO_PIXELS,
-    cx= (DISPLAY_RESOLUTION_X + DISPLAY_3_DISTANCE) / 2 - x / METERS_TO_PIXELS,
-    cy= (DISPLAY_RESOLUTION_Y + DISPLAY_3_DISTANCE) / 2 - y / METERS_TO_PIXELS,
+    fx= (viewer_position[2] + DISPLAY_3_DISTANCE) / METERS_TO_PIXELS,
+    fy= (viewer_position[2] + DISPLAY_3_DISTANCE) / METERS_TO_PIXELS,
+    cx= (DISPLAY_RESOLUTION_X + DISPLAY_3_DISTANCE) / 2 - viewer_position[0] / METERS_TO_PIXELS,
+    cy= (DISPLAY_RESOLUTION_Y + DISPLAY_3_DISTANCE) / 2 - viewer_position[1] / METERS_TO_PIXELS,
     znear=0.001,
-    zfar=10
+    zfar=100
 )
 
-x = 0
-y = 0
-z = 5
-
 camera_pose = np.array([
-    [1.0, 0.0, 0.0, x],
-    [0.0, 1.0, 0.0, y],
-    [0.0, 0.0, 1.0, z],
+    [1.0, 0.0, 0.0, viewer_position[0]],
+    [0.0, 1.0, 0.0, viewer_position[1]],
+    [0.0, 0.0, 1.0, viewer_position[2]],
     [0.0, 0.0, 0.0, 1.0],
 ])
 
@@ -128,6 +153,25 @@ color_3, depth_3 = renderer.render(scene, flags=pyrender.RenderFlags.FLAT)
 end_time = time.time()
 print("render took", end_time - start_time, "seconds")
 
-cv2.imshow("color", color_1)
+mask_1 = create_mask(depth_1, viewer_position, 0.0, None, 0.07)
+composite_1 = ((color_1.astype(np.float32) * mask_1)).astype(np.uint8) 
+
+mask_2 = create_mask(depth_2, viewer_position, 0.07, 0.07, 0.07)
+composite_2 = ((color_2.astype(np.float32) * mask_2)).astype(np.uint8) 
+
+mask_3 = create_mask(depth_3, viewer_position, 0.14, 0.07, None)
+composite_3 = ((color_3.astype(np.float32) * mask_3)).astype(np.uint8) 
+
+print("min depth = ", np.max(mask_1))
+
+combined_masks = (mask_1 + mask_2 + mask_3)
+print("combined_masks max", np.max(combined_masks))
+
+cv2.imshow("mask1", mask_1 * 255)
+cv2.imshow("mask2", mask_2 * 255)
+cv2.imshow("mask3", mask_3 * 255)
+cv2.imshow("color1", composite_1)
+cv2.imshow("color2", composite_2)
+cv2.imshow("color3", composite_3)
 cv2.waitKey(0)
 cv2.destroyAllWindows()
