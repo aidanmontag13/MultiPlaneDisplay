@@ -7,6 +7,7 @@ import os
 import time
 import copy
 import subprocess
+import argparse
 
 from skimage.filters import threshold_multiotsu
 
@@ -25,22 +26,23 @@ SCREEN_2_DISTANCE = 0.14
 DEPTH_RANGE = 0.21718
 DISPLAY_WIDTH = 0.13596
 
-DISPLAY_1_V_OFFSET = 0
-DISPLAY_2_V_OFFSET = 5
+ALL_DISPLAY_V_OFFSET = -10
+DISPLAY_1_V_OFFSET = 10
+DISPLAY_2_V_OFFSET = 30
 
-CAMERA_V_OFFSET = 35
-CAMERA_H_OFFSET = 5
+CAMERA_V_OFFSET = 30
+CAMERA_H_OFFSET = 0
 
-CAMERA_V_OFFSET_2 = 60
-CAMERA_H_OFFSET_2 = -5
+CAMERA_V_OFFSET_2 = 50
+CAMERA_H_OFFSET_2 = 0
 
-DISPLAY_1_SHIFT_SCALER = 0.9
+DISPLAY_1_SHIFT_SCALER = 0.85
 DISPLAY_2_SHIFT_SCALER = 0.4
 
-DISPLAY_1_MAGNIFY_SCALER = 1.06
-DISPLAY_2_MAGNIFY_SCALER = 1.12
+DISPLAY_1_MAGNIFY_SCALER = 1.05
+DISPLAY_2_MAGNIFY_SCALER = 1.1
 
-ROLLOFF_A = 0.1
+ROLLOFF_A = 0.07
 ROLLOFF_B = 0.15
 
 # Load model
@@ -51,6 +53,8 @@ session = ort.InferenceSession(
 
 # Get correct input name
 input_name = session.get_inputs()[0].name
+
+segment_model = YOLO("yolov8m-seg.pt")
 
 def find_usb_images():
     user = "multiplane"
@@ -139,12 +143,12 @@ def despeckle(mask, kernel_size):
 
 def blur_and_dilate(mask, blur_size):
     mask = mask * -1 + 1
-    kernel = np.ones((int(blur_size * 0.2), int(blur_size * 0.2)), np.uint8)
+    kernel = np.ones((int(blur_size * 0.2), int(blur_size * 0.8)), np.uint8)
     mask_uint8 = (mask * 255).astype(np.uint8)
     expanded = cv2.dilate(mask_uint8, kernel)
     mask = expanded.astype(np.float32) / 255.0
     mask = mask * -1 + 1
-    mask = cv2.GaussianBlur(mask, (blur_size, blur_size), 0)
+    mask = cv2.GaussianBlur(mask, (blur_size * 3, blur_size), 0)
     return mask
 
 def create_mask(depth, low_thresh, high_thresh, rolloff_a, rolloff_b, blur):
@@ -182,12 +186,57 @@ def apply_mask(image, mask):
     masked_image = image * mask
     return masked_image
 
+def create_segmentation_mask(image):
+    image = cv2.resize(image, (640, 640))
+
+    results = segment_model(image)
+    result = results[0]
+
+    if result.masks is None:
+        return None
+
+    masks = result.masks.data.cpu().numpy()
+    mask = (np.sum(masks, axis=0)).astype(np.float32)
+    mask = np.clip(mask, 0, 1).astype(np.float32)
+    #mask = cv2.GaussianBlur(mask, (25, 25), 0)
+
+    return masks
+
+def apply_segmentation_mask(mask, segmentation_masks, blur):
+    if segmentation_masks is None:
+        return mask
+
+    solid_mask = mask.copy()
+
+    for segmentation_mask in segmentation_masks:
+        segmentation_mask = segmentation_mask.astype(np.float32)
+        segmentation_mask = cv2.resize(segmentation_mask, (mask.shape[1], mask.shape[0]), interpolation=cv2.INTER_LINEAR)
+
+        ratio = np.sum(segmentation_mask * mask) / (np.sum(segmentation_mask))
+        print("ratio is:", ratio)
+
+        if ratio > 0.5 and ratio < 0.9:
+            solid_mask = np.where((segmentation_mask >= solid_mask) & (solid_mask > 0.1), segmentation_mask, solid_mask)
+
+        if ratio <= 0.5:
+            solid_mask = np.where((segmentation_mask >= solid_mask) & (solid_mask > 0.1), 0, solid_mask)
+
+        solid_mask = np.clip(solid_mask, 0, 1)
+        solid_mask = cv2.GaussianBlur(solid_mask, (blur * 3, blur), 0)
+
+    stacked_vis = np.vstack((mask, solid_mask))
+    #cv2.imshow("stacked visualization", ((stacked_vis ** 2.2) * 255).astype(np.uint8))
+    #cv2.waitKey(0)
+    #cv2.destroyAllWindows()
+        
+    return solid_mask
+
 def inpaint_mask(image, mask):
     w, h = image.shape[1], image.shape[0]
     mask = 1.0 - mask
     mask = cv2.resize(mask, (w, h), interpolation=cv2.INTER_LINEAR)
     mask_uint8 = (mask * 255).astype(np.uint8)
-    kernel = np.ones((int(3), int(3)), np.uint8)
+    kernel = np.ones((int(5), int(5)), np.uint8)
     mask = cv2.dilate(mask_uint8, kernel)
     inpainted = cv2.inpaint((image * 255).astype(np.uint8), mask_uint8, 5, cv2.INPAINT_NS)
     inpainted = inpainted.astype(np.float32) / 255.0
@@ -214,12 +263,18 @@ def stack_images(foreground, middleground, background):
     middleground = middleground * (0.33, 0.33, 0.33)
     background = background * (0.7, 1.0, 1.2)
     combined = np.vstack((foreground, middleground, background))
-    #combined = np.vstack((foreground, middleground, background))
+    combined_M = np.float32([[1, 0, 0],
+                [0, 1, ALL_DISPLAY_V_OFFSET]])
+
+    combined = cv2.warpAffine(combined, combined_M, (W, H * 3),
+                          flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT,
+                          borderValue=0)
 
     combined = np.clip(combined, 0, 1)
     #combined = combined.astype(np.float32)
     #combined = cv2.rotate(combined, cv2.ROTATE_90_CLOCKWISE)
-    print("combined shape:", combined.shape)
+    #print("combined shape:", combined.shape)
     combined = cv2.resize(combined, (800, 1280), interpolation=cv2.INTER_LINEAR)
     return combined
 
@@ -233,7 +288,11 @@ def prepare_planes(image_path):
     depth = depth ** (3.0)
     ot1, ot2 = threshold_multiotsu(depth, classes=3)
 
+    segment_masks = create_segmentation_mask(image)
+
     binary_middleground_mask = create_mask(depth, ot1 - ROLLOFF_A / 2, 1, 0.0, 0.0, 1)
+    binary_middleground_mask = apply_segmentation_mask(binary_middleground_mask, segment_masks, 1)
+
     binary_background_mask = create_mask(depth, ot2 - ROLLOFF_B / 2, 1, 0.0, 0.0, 1)
 
     middleground = inpaint_mask(linear_float_image, binary_middleground_mask)
@@ -244,14 +303,69 @@ def prepare_planes(image_path):
     middleground_depth = inpaint_mask(depth, binary_middleground_mask)
 
     foreground_mask = create_mask(depth, 0, ot1, 0.0, ROLLOFF_A, 3) #5)
+    foreground_mask = apply_segmentation_mask(foreground_mask, segment_masks, 3)
+
     middleground_front_mask = create_mask(depth, ot1, 1.0, ROLLOFF_A, ROLLOFF_B, 21) #15)
-    middleground_back_mask = create_mask(middleground_depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 5) #21)
+    middleground_front_mask = apply_segmentation_mask(middleground_front_mask, segment_masks, 21)
+
+    middleground_back_mask = create_mask(middleground_depth, 0.0, ot2, ROLLOFF_A, ROLLOFF_B, 3) #21)
+    middleground_back_mask = apply_segmentation_mask(middleground_back_mask, segment_masks, 3)
+
     background_mask = create_mask(depth, ot2, 1.0, ROLLOFF_B, 0.0, 21) #,21)
+    background_mask = apply_segmentation_mask(background_mask, segment_masks, 21)
 
     foreground = apply_mask(linear_float_image, foreground_mask)
     middleground = apply_mask(middleground, middleground_back_mask)
 
     return foreground, middleground, background, linear_float_image, middleground_front_mask, background_mask
+    
+def check_if_planes_exist(base_path):
+    dir_name = os.path.dirname(base_path)
+    file_name = os.path.basename(base_path)
+    name, ext = os.path.splitext(file_name)
+
+    new_path = os.path.join(dir_name, "processed_images", name)
+
+    required_files = ["foreground.tiff", "middleground.tiff", "background.tiff", "merged.tiff", "middleground_mask.tiff", "background_mask.tiff"]
+
+    for req_file in required_files:
+        if not os.path.exists(os.path.join(new_path, req_file)):
+            return False
+
+    return True
+
+def save_planes(foreground, middleground, background, merged, middleground_front_mask, background_mask, base_path):
+    dir_name = os.path.dirname(base_path)
+    file_name = os.path.basename(base_path)
+    name, ext = os.path.splitext(file_name)
+
+    new_path = os.path.join(dir_name, "processed_images", name)
+    os.makedirs(new_path, exist_ok=True)
+
+    print("saving planes to:", new_path)
+    print("saving foreground to ", os.path.join(new_path, "foreground.tiff"))
+    cv2.imwrite(os.path.join(new_path, "foreground.tiff"), (foreground * 65535).astype(np.uint16))
+    cv2.imwrite(os.path.join(new_path, "middleground.tiff"), (middleground * 65535).astype(np.uint16))
+    cv2.imwrite(os.path.join(new_path, "background.tiff"), (background * 65535).astype(np.uint16))
+    cv2.imwrite(os.path.join(new_path, "merged.tiff"), (merged * 65535).astype(np.uint16))
+    cv2.imwrite(os.path.join(new_path, "middleground_mask.tiff"), (middleground_front_mask * 65535).astype(np.uint16))
+    cv2.imwrite(os.path.join(new_path, "background_mask.tiff"), (background_mask * 65535).astype(np.uint16))
+
+def load_planes(base_path):
+    dir_name = os.path.dirname(base_path)
+    file_name = os.path.basename(base_path)
+    name, ext = os.path.splitext(file_name)
+
+    new_path = os.path.join(dir_name, "processed_images", name)
+    
+    foreground = cv2.imread(os.path.join(new_path, "foreground.tiff"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535.0
+    middleground = cv2.imread(os.path.join(new_path, "middleground.tiff"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535.0
+    background = cv2.imread(os.path.join(new_path, "background.tiff"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535.0
+    merged = cv2.imread(os.path.join(new_path, "merged.tiff"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535.0
+    middleground_mask = cv2.imread(os.path.join(new_path, "middleground_mask.tiff"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535.0
+    background_mask = cv2.imread(os.path.join(new_path, "background_mask.tiff"), cv2.IMREAD_UNCHANGED).astype(np.float32) / 65535.0
+
+    return foreground, middleground, background, merged, middleground_mask, background_mask
 
 def shift_mask(mask, screen_distance, viewer_position, max_shift, x_offset, y_offset, scaler):
     x, y, z = viewer_position
@@ -317,13 +431,21 @@ def interpolate_position(position, previous_position, alpha):
     return smoothed_position
 
 def renderer_worker(foreground, middleground, background, merged, middleground_mask, background_mask, position_queue, render_queue, render_stop_event):
-    alpha = 0.2
+    alpha = 0.3
     smoothed_position = None
     target_position = None
 
     flat_image = np.zeros((1280, 800, 3), dtype=np.float32)
     merged_srgb = (merged * (0.7, 1.0, 1.3)) ** (1 / 2.2)
     flat_image[0:426, 0:800] = merged_srgb
+    flat_image_M = np.float32([[1, 0, 0],
+                [0, 1, ALL_DISPLAY_V_OFFSET]])
+
+    flat_image = cv2.warpAffine(flat_image, flat_image_M, flat_image.shape[1::-1],
+                          flags=cv2.INTER_LINEAR,
+                          borderMode=cv2.BORDER_CONSTANT,
+                          borderValue=0)
+
     render_queue.put(flat_image)
     time.sleep(3)
 
@@ -369,7 +491,7 @@ def renderer_worker(foreground, middleground, background, merged, middleground_m
     render_queue.put(black_image)
 
 def display_worker(render_queue, stop_event, idle_event):
-    alpha = 0.1 
+    alpha = 0.3 
 
     current_image = np.zeros((1280, 800, 3), dtype=np.float32)
     target_image  = np.zeros((1280, 800, 3), dtype=np.float32)
@@ -411,15 +533,21 @@ def display_worker(render_queue, stop_event, idle_event):
         end_time = time.time()
         elapsed_time = end_time - start_time
 
-        print(f"Frame time: {elapsed_time:.4f}s")
+        #print(f"Frame time: {elapsed_time:.4f}s")
 
 def main():
+    parser = argparse.ArgumentParser()
+
+    parser.add_argument("--aimode", action="store_true")
+
+    aimode = parser.parse_args().aimode
+
     subprocess.Popen(["unclutter", "-idle", "0", "-root"])
 
     headtracker.set_backlight(255)
     images = find_usb_images()
 
-    cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker()
+    cap, model, camera_matrix, dist_coeffs = headtracker.initialize_headtracker(aimode=aimode)
     position_queue = queue.Queue(maxsize=1)
     render_queue = queue.Queue(maxsize=2)
 
@@ -429,7 +557,7 @@ def main():
     
     headtracker_thread = threading.Thread(
         target=headtracker.headtracker_worker,
-        args=(cap, model, camera_matrix, dist_coeffs, position_queue, stop_event, idle_event),
+        args=(cap, model, aimode, camera_matrix, dist_coeffs, position_queue, stop_event, idle_event),
         daemon=False,
     )
 
@@ -448,7 +576,19 @@ def main():
             time.sleep(3)
             continue
 
-        foreground, middleground, background, merged, middleground_mask, background_mask = prepare_planes(image_path)
+        checked_planes = check_if_planes_exist(image_path)
+
+        #checked_planes = False # force reprocessing for testing
+
+        if not checked_planes:
+            print("preparing planes for image:", image_path)
+            foreground, middleground, background, merged, middleground_mask, background_mask = prepare_planes(image_path)
+
+            save_planes(foreground, middleground, background, merged, middleground_mask, background_mask, os.path.splitext(image_path)[0])
+
+        else:
+            print("loading planes for image:", image_path)
+            foreground, middleground, background, merged, middleground_mask, background_mask = load_planes(image_path)
 
         renderer_thread = threading.Thread(
             target=renderer_worker,
@@ -458,7 +598,7 @@ def main():
 
         renderer_thread.start()
 
-        time.sleep(30)
+        time.sleep(20)
     
         render_stop_event.set()
         renderer_thread.join()
